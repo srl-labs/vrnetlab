@@ -54,7 +54,7 @@ docker-push:
 docker-push-image:
 	@if [ -z "$$IMAGE" ]; then echo "ERROR: No IMAGE specified"; exit 1; fi
 	@if [ "$(IMAGE)" = "$(VERSION)" ]; then echo "ERROR: Incorrect version string"; exit 1; fi
-	docker push $(REGISTRY)$(VENDOR)_$(NAME):$(VERSION)
+	docker push $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION)
 
 usage:
 	@echo "Usage: put the $(VENDOR) $(NAME) $(IMAGE_FORMAT) image in this directory and run:"
