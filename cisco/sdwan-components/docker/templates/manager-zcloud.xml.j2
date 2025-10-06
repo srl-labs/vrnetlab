@@ -1,0 +1,59 @@
+<config xmlns="http://tail-f.com/ns/config/1.0">
+  <system xmlns="http://viptela.com/system">
+    <personality>vmanage</personality>
+    <device-model>vmanage</device-model>
+    <host-name>{{ hostname }}</host-name>
+    <aaa>
+      <user>
+        <name>{{ username }}</name>
+        <password>{{ password }}</password>
+        <group>netadmin</group>
+      </user>
+    </aaa>
+  </system>
+  <vpn xmlns="http://viptela.com/vpn">
+    <vpn-instance>
+      <vpn-id>512</vpn-id>
+      <interface>
+        <if-name>eth0</if-name>
+         <ip>
+          <address>{{ mgmt_ip }}/{{ mgmt_prefix }}</address>
+         </ip>
+         <shutdown>false</shutdown>
+      </interface>
+      <ip>
+        <route>
+          <prefix>0.0.0.0/0</prefix>
+          <next-hop>
+            <address>{{ mgmt_gw }}</address>
+          </next-hop>
+        </route>
+      </ip>
+    </vpn-instance>
+  </vpn>
+  <vpn xmlns="http://viptela.com/vpn">
+    <vpn-instance>
+      <vpn-id>0</vpn-id>
+      <interface>
+        <if-name>eth1</if-name>
+         <ip>
+          <dhcp-client>true</dhcp-client>
+         </ip>
+         <shutdown>false</shutdown>
+         <tunnel-interface>
+          <encapsulation>
+            <encap>ipsec</encap>
+          </encapsulation>
+          <color>
+            <value>default</value>
+          </color>
+          <allow-service>
+            <sshd>true</sshd>
+            <netconf>true</netconf>
+          </allow-service>
+        </tunnel-interface>
+        <shutdown>false</shutdown>
+      </interface>
+    </vpn-instance>
+  </vpn>
+</config>
