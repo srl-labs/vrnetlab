@@ -40,6 +40,15 @@ logging.Logger.trace = trace
 
 
 class VMX_vcp(vrnetlab.VM):
+
+
+    # expect pattern for commit complete
+    # commit complete
+
+    # [edit]
+    # <prompt>#
+    COMMIT_PATTERN = r"commit complete[\s\S]*\[edit\][\s\S]*#"
+
     def __init__(
         self,
         hostname,
@@ -136,7 +145,7 @@ class VMX_vcp(vrnetlab.VM):
                     self.wait_write("edit exclusive", ">", 10)
                     self.wait_write("delete chassis auto-image-upgrade")
                     self.wait_write("commit")
-                    self.wait_write("exit")
+                    self.wait_write("exit", wait=self.COMMIT_PATTERN)
                     self.logger.info("requesting power-off")
                     self.wait_write("request system power-off", ">")
                     self.wait_write("yes", "Power Off the system")
@@ -171,7 +180,7 @@ class VMX_vcp(vrnetlab.VM):
         self.wait_write("edit exclusive", ">", 10)
         self.wait_write("delete chassis auto-image-upgrade")
         self.wait_write("commit")
-        self.wait_write("set chassis fpc 0 pic 0 number-of-ports 96")
+        self.wait_write("set chassis fpc 0 pic 0 number-of-ports 96", self.COMMIT_PATTERN)
         self.wait_write("set system host-name {}".format(self.hostname))
         self.wait_write("set system services ssh")
         self.wait_write("set system services netconf ssh")
@@ -204,7 +213,7 @@ class VMX_vcp(vrnetlab.VM):
             "set routing-instances mgmt_junos routing-options static route 0.0.0.0/0 next-hop 10.0.0.2"
         )
         self.wait_write("commit")
-        self.wait_write("exit")
+        self.wait_write("exit", self.COMMIT_PATTERN)
         # write another exist as sometimes the first exit from exclusive edit abrupts before command finishes
         self.wait_write("exit", wait=">")
 
@@ -230,7 +239,7 @@ class VMX_vcp(vrnetlab.VM):
             self.wait_write(line)
         # Commit and GTFO
         self.wait_write("commit")
-        self.wait_write("exit")
+        self.wait_write("exit", self.COMMIT_PATTERN)
 
     def wait_write(self, cmd, wait="#", timeout=None):
         """Wait for something and then send command"""
