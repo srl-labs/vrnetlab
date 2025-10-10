@@ -47,7 +47,7 @@ class VMX_vcp(vrnetlab.VM):
 
     # [edit]
     # <prompt>#
-    COMMIT_PATTERN = r"commit complete[\s\S]*\[edit\][\s\S]*#"
+    COMMIT_PATTERN = r"(?s)commit complete.*\[edit\].*#"
 
     def __init__(
         self,
