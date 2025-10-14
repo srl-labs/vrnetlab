@@ -67,6 +67,21 @@ class FreeBSD_vm(vrnetlab.VM):
 
         self.qemu_args.extend(["-cdrom", "/" + self.image_name])
 
+    def _merge_cloud_init_config(self, dest, src):
+        """Cleanly merge two dictionaries, recursively"""
+        result = dest.copy()
+        # Update destination with source to avoid losing the default configuration
+        result.update(src)
+
+        # Merge all lists recursively, this cannot be done with the update() method
+        for key in src:
+            if key in dest:
+                if isinstance(dest[key], dict) and isinstance(src[key], dict):
+                    result[key] = self._merge_cloud_init_config(dest[key], src[key])
+                elif isinstance(dest[key], list) and isinstance(src[key], list):
+                    result[key] = dest[key] + src[key]
+        return result
+
     def create_boot_image(self):
         """Creates a cloud-init iso image with a bootstrap configuration"""
         bootstrap_data = {
@@ -108,9 +123,7 @@ class FreeBSD_vm(vrnetlab.VM):
             try:
                 with open(CLOUD_INIT_CONFIG_FILE, 'r') as f:
                     custom_data = yaml.safe_load(f)
-                    # Update custom_data with bootstrap_data to avoid losing the default configuration
-                    custom_data.update(bootstrap_data)
-                    bootstrap_data = custom_data
+                    bootstrap_data = self._merge_cloud_init_config(bootstrap_data, custom_data)
             except yaml.YAMLError as e:
                 self.logger.error(f"Could not parse custom config file: {e}")
             except IOError as e:
