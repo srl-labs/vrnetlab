@@ -8,9 +8,10 @@ import signal
 import subprocess
 import sys
 
-
+import yaml
 import vrnetlab
 
+CLOUD_INIT_CONFIG_FILE = "/config/cloud-init.yaml"
 BACKUP_FILE = "/config/backup.tar.gz"
 
 
@@ -68,32 +69,61 @@ class FreeBSD_vm(vrnetlab.VM):
 
     def create_boot_image(self):
         """Creates a cloud-init iso image with a bootstrap configuration"""
+        bootstrap_data = {
+            'hostname': self.hostname,
+            'fqdn': self.hostname,
+            'users': [
+                {
+                    'name': self.username,
+                    'sudo': 'ALL=(ALL) NOPASSWD: ALL',
+                    'groups': 'wheel',
+                    'home': f'/usr/home/{self.username}',
+                    'shell': '/bin/tcsh',
+                    'plain_text_passwd': self.password,
+                    'lock_passwd': False
+                }
+            ],
+            'ssh_pwauth': True,
+            'disable_root': False,
+            'timezone': 'UTC',
+            'runcmd': [
+                # Disable cloud-init for the subsequent boots
+                "sed -i '' '/cloudinit_enable=\"YES\"/s/YES/NONE/' /etc/rc.conf"
+            ]
+        }
+
+        network_data = {
+            'version': 2,
+            'ethernets': {
+                'vtnet0': {
+                    'addresses': ['10.0.0.15/24'],
+                    'gateway4': '10.0.0.2'
+                }
+            }
+        }
+
+        # Merge custom user cloud-init config if the file exists
+        if os.path.exists(CLOUD_INIT_CONFIG_FILE):
+            self.logger.debug(f"Found custom config at '{CLOUD_INIT_CONFIG_FILE}'")
+            try:
+                with open(CLOUD_INIT_CONFIG_FILE, 'r') as f:
+                    custom_data = yaml.safe_load(f)
+                    # Update custom_data with bootstrap_data to avoid losing the default configuration
+                    custom_data.update(bootstrap_data)
+                    bootstrap_data = custom_data
+            except yaml.YAMLError as e:
+                self.logger.error(f"Could not parse custom config file: {e}")
+            except IOError as e:
+                self.logger.error(f"Could not read custom config file: {e}")
+        else:
+            self.logger.debug(f"No custom config file found at '{CLOUD_INIT_CONFIG_FILE}'. Using defaults.")
 
         with open("/bootstrap_config.yaml", "w") as cfg_file:
             cfg_file.write("#cloud-config\n")
-            cfg_file.write(f"hostname: {self.hostname}\n")
-            cfg_file.write(f"fqdn: {self.hostname}\n")
-            cfg_file.write("users:\n")
-            cfg_file.write(f"  - name: {self.username}\n")
-            cfg_file.write('    sudo: "ALL=(ALL) NOPASSWD: ALL"\n')
-            cfg_file.write("    groups: wheel\n")
-            cfg_file.write(f"    home: /usr/home/{self.username}\n")
-            cfg_file.write("    shell: /bin/tcsh\n")
-            cfg_file.write(f"    plain_text_passwd: {self.password}\n")
-            cfg_file.write("    lock_passwd: false\n")
-            cfg_file.write("ssh_pwauth: true\n")
-            cfg_file.write("disable_root: false\n")
-            cfg_file.write("timezone: UTC\n")
-            # Disable cloud-init for the subsequent boots
-            cfg_file.write("runcmd:\n")
-            cfg_file.write("  - sed -i '' '/cloudinit_enable=\"YES\"/s/YES/NONE/' /etc/rc.conf\n")
+            yaml.dump(bootstrap_data, cfg_file, default_flow_style=False)
 
         with open("/network_config.yaml", "w") as net_cfg_file:
-            net_cfg_file.write("version: 2\n")
-            net_cfg_file.write("ethernets:\n")
-            net_cfg_file.write("  vtnet0:\n")
-            net_cfg_file.write("    addresses: [10.0.0.15/24]\n")
-            net_cfg_file.write("    gateway4: 10.0.0.2\n")
+            yaml.dump(network_data, net_cfg_file, default_flow_style=False)
 
         cloud_localds_args = [
             "cloud-localds",

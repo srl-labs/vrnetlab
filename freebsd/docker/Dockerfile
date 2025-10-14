@@ -30,6 +30,7 @@ RUN apt-get update -qy \
    telnet \
    cloud-utils \
    sshpass \
+   python3-yaml \
    && rm -rf /var/lib/apt/lists/*
 
 ARG IMAGE
