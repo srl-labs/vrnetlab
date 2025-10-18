@@ -106,7 +106,8 @@ class Ubuntu_vm(vrnetlab.VM):
             "/bootstrap_config.yaml",
         ]
 
-        subprocess.Popen(cloud_localds_args)
+        process = subprocess.Popen(cloud_localds_args)
+        process.wait()
 
     def bootstrap_spin(self):
         """This function should be called periodically to do work."""
