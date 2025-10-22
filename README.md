@@ -115,6 +115,32 @@ sudo docker exec container_name_or_id sh -c 'echo "1,2" > /reset' #reset VM 1 & 
 > **Note:**  
 > VM numbers correspond to the internal numbering used by vrnetlab (typically starting from 0).
 
+## Snapshotting virtual routers
+
+You can snapshot all VMs in a running container by adding a `/snapshot-save` file to the root path of the container. 
+This prompts the container to pause the VM and save VM states, disk overlays and metadata to `/snapshot.tar` before resuming the VM. 
+Using this snapshot file you can start nodes using the same image up to the exact same state the VM had when you took the snapshot.
+
+This can save a lot of time for workflows that rely on VMs reaching a known-good state.
+
+**Basic usage**
+```bash
+# Start a VM and wait for it to boot
+docker run -d --name node --privileged vrnetlab/{your-image}
+
+# Create snapshot
+docker exec node touch /snapshot-save
+
+# Extract snapshot tar
+docker cp node:/snapshot.tar ./snapshot.tar
+
+# Start new container with snapshot
+docker run -d --name restored-node --privileged \ 
+  -e RESTORE_SNAPSHOT=1 \ 
+  -v $(pwd)/snapshot.tar:/snapshot.tar:ro \ 
+  vrnetlab/{your-image}
+```
+
 ## Which vrnetlab routers are supported?
 
 Since the changes we made in this fork are VM specific, we added a few popular
