@@ -8,9 +8,12 @@ import math
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
 import telnetlib
+import tempfile
 import time
 from pathlib import Path
 
@@ -257,18 +260,37 @@ class VM:
         # wait_pattern is the pattern we wait on the serial connection when pushing config commands
         self.wait_pattern = "#"
 
-        overlay_disk_image = re.sub(r"(\.[^.]+$)", r"-overlay\1", disk_image)
-        # append role to overlay name to have different overlay images for control and data plane images
-        if hasattr(self, "role"):
-            tokens = overlay_disk_image.split(".")
-            tokens[0] = tokens[0] + "-" + self.role + str(self.num)
-            overlay_disk_image = ".".join(tokens)
+        # Check if we're restoring from snapshot
+        snapshot_disk = f"/snapshot-data/vm{self.num}/disk.qcow2"
+        snapshot_state = f"/snapshot-data/vm{self.num}/state.img"
+        snapshot_metadata = f"/snapshot-data/vm{self.num}/metadata.json"
+        restoring_snapshot = os.path.exists(snapshot_disk) and os.path.exists(snapshot_state)
+
+        # Load snapshot metadata if restoring
+        self.snapshot_metadata = None
+        if restoring_snapshot and os.path.exists(snapshot_metadata):
+            with open(snapshot_metadata, "r") as f:
+                self.snapshot_metadata = json.load(f)
+            self.logger.info(f"Loaded snapshot metadata: {self.snapshot_metadata}")
+
+        if restoring_snapshot:
+            self.logger.info(f"Restoring from snapshot")
+            self.logger.info(f"Snapshot disk: {snapshot_disk}")
+            self.logger.info(f"Snapshot state: {snapshot_state}")
+            overlay_disk_image = f"/snapshot-data/vm{self.num}/disk-overlay.qcow2"
+            base_disk = snapshot_disk
+            base_format = "qcow2"
+        else:
+            overlay_disk_image = re.sub(r"(\.[^.]+$)", r"-overlay\1", disk_image)
+            if hasattr(self, "role"):
+                tokens = overlay_disk_image.split(".")
+                tokens[0] = tokens[0] + "-" + self.role + str(self.num)
+                overlay_disk_image = ".".join(tokens)
+            base_disk = disk_image
+            base_format = self._overlay_disk_image_format()
 
         if not os.path.exists(overlay_disk_image):
-            self.logger.debug(
-                f"class: {self.__class__.__name__}, disk_image: {disk_image}, overlay: {overlay_disk_image}"
-            )
-            self.logger.debug("Creating overlay disk image")
+            self.logger.debug(f"Creating overlay disk image: {overlay_disk_image}")
             run_command(
                 [
                     "qemu-img",
@@ -276,13 +298,14 @@ class VM:
                     "-f",
                     "qcow2",
                     "-F",
-                    self._overlay_disk_image_format(),
+                    base_format,
                     "-b",
-                    disk_image,
+                    base_disk,
                     overlay_disk_image,
                 ]
             )
 
+        # Build qemu args
         self.qemu_args = [
             "qemu-system-x86_64",
             "-display",
@@ -299,9 +322,14 @@ class VM:
             self.cpu,
             "-smp",
             self.smp,  # cpu core configuration
-            "-drive",
-            f"if={driveif},file={overlay_disk_image}",
         ]
+
+        # Always use -drive to create the disk device - migration requires exact device match
+        self.qemu_args.extend(["-drive", f"if={driveif},file={overlay_disk_image}"])
+
+        # If restoring from snapshot, add -incoming parameter
+        if restoring_snapshot:
+            self.qemu_args.extend(["-incoming", f"exec:cat\\ \\<\\ {snapshot_state}"])
 
         # add additional qemu args if they were provided
         if self.qemu_additional_args:
@@ -351,6 +379,7 @@ class VM:
             quoted_smbios = '"' + smbios_line + '"'
             cmd.extend(["-smbios", quoted_smbios])
 
+        # Always create devices (NICs, PCI buses) - migration requires exact device match
         # setup PCI buses
         if self.provision_pci_bus:
             for i in range(1, math.ceil(self.num_nics / self.nics_per_pci_bus) + 1):
@@ -423,6 +452,32 @@ class VM:
                         5000 + self.num
                     )
                 )
+
+        # If we restored from snapshot, resume the VM (it's paused after migration)
+        snapshot_state = f"/snapshot-data/vm{self.num}/state.img"
+        if os.path.exists(snapshot_state):
+            self.logger.info("Resuming VM after snapshot restore")
+            if self.use_scrapli:
+                self.scrapli_qm.channel.write("cont\r")
+            else:
+                self.qm.write(b"cont\r")
+            time.sleep(2)
+            self.logger.info("VM resumed")
+            # Mark VM as running - snapshot restored a fully booted VM
+            self.running = True
+            self.logger.info("VM marked as running (restored from snapshot)")
+
+            # Close serial console connection to free it for external access
+            try:
+                if self.use_scrapli:
+                    self.scrapli_tn.close()
+                    self.logger.info("Closed scrapli serial connection")
+                else:
+                    self.tn.close()
+                    self.logger.info("Closed telnet serial connection")
+            except Exception as e:
+                self.logger.warning(f"Could not close serial connection: {e}")
+
         try:
             outs, errs = self.p.communicate(timeout=2)
             self.logger.info("STDOUT: %s" % outs)
@@ -529,7 +584,13 @@ class VM:
 
         res = []
         res.append("-device")
-        self.mgmt_mac = self.get_mgmt_mac()
+
+        # If restoring from snapshot, use the saved management MAC address
+        if self.snapshot_metadata and "mac_addresses" in self.snapshot_metadata and len(self.snapshot_metadata["mac_addresses"]) > 0:
+            self.mgmt_mac = self.snapshot_metadata["mac_addresses"][0]
+            self.logger.info(f"Using saved management MAC: {self.mgmt_mac}")
+        else:
+            self.mgmt_mac = self.get_mgmt_mac()
 
         res.append(self.nic_type + f",netdev=p00,mac={self.mgmt_mac}")
         res.append("-netdev")
@@ -749,17 +810,26 @@ class VM:
                 )
                 continue
 
-            # Try to get the MAC address from the container interface
-            # This ensures VM NIC MAC matches the macvlan interface MAC for proper bridge mode operation
-            intf_name = f"{self.data_intf_prefix}{i}"
-            mac = self.get_intf_mac(intf_name)
-            
-            if mac:
-                self.logger.info(f"Using container interface MAC {mac} for VM NIC {intf_name}")
-            else:
-                # Fallback to generated MAC if we can't read the container interface MAC
+            mac = None
+            # If restoring from snapshot, use saved MAC addresses
+            # MAC at index 0 is management, so data plane NICs start at index 1
+            if self.snapshot_metadata and "mac_addresses" in self.snapshot_metadata:
+                mac_index = 1 + (i - start_eth)
+                if mac_index < len(self.snapshot_metadata["mac_addresses"]):
+                    mac = self.snapshot_metadata["mac_addresses"][mac_index]
+                    self.logger.info(f"Using saved MAC from snapshot for eth{i}: {mac}")
+
+            # otherwise get mac from container interface
+            if not mac:
+                intf_name = f"{self.data_intf_prefix}{i}"
+                mac = self.get_intf_mac(intf_name)
+                if mac:
+                    self.logger.info(f"Using container interface MAC {mac} for VM NIC {intf_name}")
+
+            # otherwise generate the mac
+            if not mac:
                 mac = gen_mac(i)
-                self.logger.debug(f"Generated MAC {mac} for VM NIC {intf_name}")
+                self.logger.debug(f"Generated MAC {mac} for VM NIC eth{i}")
 
             res.append("-device")
             res.append(
@@ -957,6 +1027,118 @@ class VM:
         sys.stdout.buffer.write(bytes)
         sys.stdout.buffer.flush()
 
+    def _get_overlay_path(self):
+        """Helper to get current overlay disk path."""
+        for i, arg in enumerate(self.qemu_args):
+            if arg == "-drive":
+                drive_spec = self.qemu_args[i + 1]
+                for part in drive_spec.split(","):
+                    if part.startswith("file="):
+                        return part.split("=", 1)[1]
+        raise Exception("Could not find overlay disk path")
+
+    def snapshot_save_to_dir(self, vm_dir):
+        """Save VM state to directory using QEMU migrate to file."""
+        os.makedirs(vm_dir, exist_ok=True)
+
+        state_file = os.path.join(vm_dir, "state.img")
+        disk_file = os.path.join(vm_dir, "disk.qcow2")
+        overlay_path = self._get_overlay_path()
+
+        try:
+            # Pause VM
+            self.logger.info(f"Pausing VM {self.num}")
+            if self.use_scrapli:
+                self.scrapli_qm.channel.write("stop\r")
+            else:
+                self.qm.write(b"stop\r")
+            time.sleep(1)
+
+            # Dump state via migration
+            self.logger.info(f"Saving state for VM {self.num}")
+            cmd = f'migrate "exec:cat > {state_file}"\r'
+            if self.use_scrapli:
+                self.scrapli_qm.channel.write(cmd)
+            else:
+                self.qm.write(cmd.encode())
+
+            # Wait for migration complete
+            timeout = 300
+            start = time.time()
+            while time.time() - start < timeout:
+                time.sleep(2)
+                if self.use_scrapli:
+                    self.scrapli_qm.channel.write("info migrate\r")
+                else:
+                    self.qm.write(b"info migrate\r")
+                time.sleep(0.5)
+
+                if self.use_scrapli:
+                    response = self.scrapli_qm.channel.read().decode()
+                else:
+                    response = self.qm.read_very_eager().decode()
+
+                if "completed" in response:
+                    break
+                elif "failed" in response:
+                    raise Exception("Migration failed")
+
+            # Copy disk
+            self.logger.info(f"Copying disk for VM {self.num}")
+            shutil.copy2(overlay_path, disk_file)
+
+            # Save metadata (MAC addresses for NICs) to restore devices correctly
+            metadata_file = os.path.join(vm_dir, "metadata.json")
+            metadata = {
+                "mac_addresses": [],
+                "num_nics": self.num_nics,
+                "provision_pci_bus": self.provision_pci_bus,
+                "nics_per_pci_bus": self.nics_per_pci_bus
+            }
+
+            # Extract MAC addresses from QEMU via "info network" command
+            try:
+                if self.use_scrapli:
+                    self.scrapli_qm.channel.write("info network\r")
+                    time.sleep(0.5)
+                    response = self.scrapli_qm.channel.read().decode()
+                else:
+                    self.qm.write(b"info network\r")
+                    time.sleep(0.5)
+                    response = self.qm.read_very_eager().decode()
+
+                # Extract MAC addresses using regex pattern
+                mac_pattern = r'macaddr=([0-9a-f:]{17})'
+                macs = re.findall(mac_pattern, response, re.IGNORECASE)
+                metadata["mac_addresses"] = macs
+                self.logger.info(f"Extracted MAC addresses from QEMU: {macs}")
+            except Exception as e:
+                self.logger.warning(f"Could not extract MACs from QEMU: {e}")
+
+            with open(metadata_file, "w") as f:
+                json.dump(metadata, f)
+            self.logger.info(f"Saved device metadata: {metadata}")
+
+            # Resume VM
+            self.logger.info(f"Resuming VM {self.num}")
+            if self.use_scrapli:
+                self.scrapli_qm.channel.write("cont\r")
+            else:
+                self.qm.write(b"cont\r")
+
+            return {"state": state_file, "disk": disk_file, "metadata": metadata_file}
+
+        except Exception as e:
+            # Always try to resume
+            try:
+                if self.use_scrapli:
+                    self.scrapli_qm.channel.write("cont\r")
+                else:
+                    self.qm.write(b"cont\r")
+            except:
+                pass
+            raise Exception(f"Snapshot failed for VM {self.num}: {e}")
+
     def work(self):
         self.check_qemu()
         if not self.running:
@@ -1065,6 +1247,11 @@ class VR:
         if mgmt_passthrough_override:
             self.mgmt_passthrough = mgmt_passthrough_override.lower() == "true"
 
+        # Check if we should restore from snapshot before VMs are created
+        if os.environ.get("RESTORE_SNAPSHOT") == "1" and os.path.exists("/snapshot.tar"):
+            self.logger.info("Restoring from /snapshot.tar")
+            self.snapshot_restore()
+
         try:
             os.mkdir("/tftpboot")
         except:
@@ -1074,6 +1261,50 @@ class VR:
         health_file = open("/health", "w")
         health_file.write("%d %s" % (exit_status, message))
         health_file.close()
+
+    def snapshot_save(self):
+        """Save all VMs to snapshot tar archive."""
+        tar_path = "/snapshot.tar"
+        self.logger.info(f"Creating snapshot: {tar_path}")
+
+        # Create temp directory for snapshot data
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Save each VM
+            for vm in self.vms:
+                vm_dir = os.path.join(tmpdir, f"vm{vm.num}")
+                try:
+                    vm.snapshot_save_to_dir(vm_dir)
+                    self.logger.info(f"VM {vm.num} saved")
+                except Exception as e:
+                    self.logger.error(f"Failed to save VM {vm.num}: {e}")
+                    raise
+
+            # Create tar
+            self.logger.info(f"Creating tar archive")
+            with tarfile.open(tar_path, "w") as tar:
+                for vm in self.vms:
+                    vm_dir = os.path.join(tmpdir, f"vm{vm.num}")
+                    tar.add(vm_dir, arcname=f"vm{vm.num}")
+
+        self.logger.info(f"Snapshot saved: {tar_path}")
+        return tar_path
+
+    def snapshot_restore(self):
+        """Restore snapshot data from tar archive to prepare for VM restore."""
+        tar_path = "/snapshot.tar"
+        extract_dir = "/snapshot-data"
+
+        if not os.path.exists(tar_path):
+            raise Exception(f"Snapshot file not found: {tar_path}")
+
+        self.logger.info(f"Extracting snapshot: {tar_path}")
+        os.makedirs(extract_dir, exist_ok=True)
+
+        with tarfile.open(tar_path, "r") as tar:
+            tar.extractall(extract_dir)
+
+        self.logger.info(f"Snapshot extracted to: {extract_dir}")
+        return extract_dir
 
     def start(self):
         """Start the virtual router"""
@@ -1124,6 +1355,19 @@ class VR:
                     self.logger.error(
                         f"Failed to cleanup /reset file({e}). qemu-monitor system_reset will likely be triggered again on VMs"
                     )
+
+            # Snapshot save
+            if os.path.exists("/snapshot-save"):
+                try:
+                    self.snapshot_save()
+                    self.logger.info("Snapshot saved to /snapshot.tar")
+                except Exception as e:
+                    self.logger.error(f"Snapshot save failed: {e}")
+
+                try:
+                    os.remove("/snapshot-save")
+                except Exception as e:
+                    self.logger.error(f"Failed to cleanup /snapshot-save: {e}")
 
 
 class QemuBroken(Exception):
