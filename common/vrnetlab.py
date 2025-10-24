@@ -1264,7 +1264,7 @@ class VR:
 
     def snapshot_save(self):
         """Save all VMs to snapshot tar archive."""
-        tar_path = "/snapshot.tar"
+        tar_path = "/snapshot-output.tar"
         self.logger.info(f"Creating snapshot: {tar_path}")
 
         # Create temp directory for snapshot data
@@ -1360,7 +1360,7 @@ class VR:
             if os.path.exists("/snapshot-save"):
                 try:
                     self.snapshot_save()
-                    self.logger.info("Snapshot saved to /snapshot.tar")
+                    self.logger.info("Snapshot saved to /snapshot-output.tar")
                 except Exception as e:
                     self.logger.error(f"Snapshot save failed: {e}")
 
