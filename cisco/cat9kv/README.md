@@ -1,6 +1,6 @@
-# Cisco Catalyst 9000V
+# Cisco Catalyst 9000V / Catalyst 9800-CL Wireless Controller
 
-This is the vrnetlab image for the Cisco Catalyst 9000v (cat9kv, c9000v).
+This is the vrnetlab image for the Cisco Catalyst 9000v (cat9kv, c9000v) and Cisco Catalyst 9800-CL Wireless Controller (c9800cl).
 
 The Cat9kv emulates two types of ASICs that are found in the common Catalyst 9000 hardware platforms, either:
 
@@ -15,9 +15,13 @@ Eight interfaces will always appear regardless if you have defined any links in 
 
 ## Building the image
 
-Copy the Cat9kv .qcow2 file in this directory and you can perform `make docker-image`. On average the image takes approxmiately ~4 minutes to build as an initial install process occurs.
+Copy the Cat9kv or C9800-CL .qcow2 file in this directory and you can perform `make docker-image`. On average the image takes approxmiately ~4 minutes to build as an initial install process occurs.
 
-The UADP and Q200 use the same .qcow2 image. The default image created is the UADP image.
+The build process automatically detects whether you're building a cat9kv or c9800cl image based on the filename:
+- Files containing "c9800" build as `cisco_c9800cl:VERSION`
+- Other files build as `cisco_cat9kv:VERSION`
+
+For Cat9kv, the UADP and Q200 use the same .qcow2 image. The default image created is the UADP image.
 
 > It is possible to tag the UADP and Q200 builds separately by prefixing the version in the filename. For example: `cat9kv_prd.Q200-x.y.z.qcow2` or `cat9kv_prd.UADP-x.y.z.qcow2`
 
@@ -27,23 +31,36 @@ To configure the Q200 image or enable a higher throughput dataplane for UADP; yo
 
 Known working versions:
 
+**Cat9kv:**
 - cat9kv-prd-17.12.01prd9.qcow2 (UADP & Q200)
+
+**C9800-CL:**
+- The C9800-CL uses the same IOS-XE base as Cat9kv and should work with versions 17.x and newer
+- Example filename: C9800-CL-universalk9.17.15.04b.qcow2
 
 ## Usage
 
-You can define the image easily and use it in a topolgy. As mentioned earlier no links are requried to be defined.
+You can define the image easily and use it in a topology. As mentioned earlier no links are required to be defined.
 
 ```yaml
-# topology.clab.yaml
+# topology.clab.yaml for Cat9kv
 name: mylab
 topology:
   nodes:
     cat9kv:
       kind: cisco_cat9kv
-      image: vrnetlab/vr-cat9kv:<tag>
+      image: vrnetlab/cisco_cat9kv:<tag>
+
+# topology.clab.yaml for C9800-CL
+name: mylab
+topology:
+  nodes:
+    c9800cl:
+      kind: cisco_c9800cl
+      image: vrnetlab/cisco_c9800cl:<tag>
 ```
 
-You can also supply a vswitch.xml file using `binds`. Below is an example topology file.
+You can also supply a vswitch.xml file using `binds` (for Cat9kv only). Below is an example topology file.
 
 ```yaml
 # topology.clab.yaml
@@ -52,10 +69,12 @@ topology:
   nodes:
     cat9kv:
       kind: cisco_cat9kv
-      image: vrnetlab/vr-cat9kv:<tag>
+      image: vrnetlab/cisco_cat9kv:<tag>
       binds:
         - /path/to/vswitch.xml:/vswitch.xml
 ```
+
+**Note:** The C9800-CL is a wireless LAN controller and does not require vswitch.xml configuration.
 
 ### Interface naming
 
@@ -90,8 +109,8 @@ topology:
 
 ## System requirements
 
-|           | UADP (Default)| Q200  |
-| --------- | ------------- | ----- |
-| vCPU      | 4             | 4     |
-| RAM (MB)  | 18432         | 12288 |
-| Disk (GB) | 4             | 4     |
+|           | Cat9kv UADP (Default) | Cat9kv Q200 | C9800-CL |
+| --------- | --------------------- | ----------- | -------- |
+| vCPU      | 4                     | 4           | 4        |
+| RAM (MB)  | 18432                 | 12288       | 4096     |
+| Disk (GB) | 4                     | 4           | 4        |
