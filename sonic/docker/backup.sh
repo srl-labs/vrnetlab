@@ -95,7 +95,7 @@ restore() {
         echo "Copying startup config file to the VM..."
 
         if wait_for_ssh; then
-            $SCP_CMD $BACKUP_FILE $HOST:$TMP_FILE && $SSH_CMD $HOST "sudo config load -y $TMP_FILE && sudo config save -y"
+            $SCP_CMD $BACKUP_FILE $HOST:$TMP_FILE && $SSH_CMD $HOST "sudo config replace -y $TMP_FILE && sudo config save -y"
         else
             echo "Failed to establish SSH connection. Config copy operation aborted."
         fi

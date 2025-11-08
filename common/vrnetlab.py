@@ -596,6 +596,27 @@ class VM:
 
         return mgmt_gw_v4, mgmt_gw_v6
 
+    def get_intf_mac(self, intf_name: str) -> str:
+        """Get the MAC address of a container interface
+        
+        Returns the MAC address of the specified interface, or None if not found.
+        This is used to sync VM NIC MAC addresses with container interface MAC addresses
+        for proper macvlan bridge mode operation.
+        """
+        try:
+            stdout, _ = run_command(["ip", "--json", "link", "show", "dev", intf_name])
+            if stdout:
+                command_json = json.loads(stdout.decode("utf-8"))
+                if command_json and len(command_json) > 0:
+                    mac_address = command_json[0].get("address")
+                    if mac_address:
+                        self.logger.debug(f"Found MAC address {mac_address} for interface {intf_name}")
+                        return mac_address
+        except Exception as e:
+            self.logger.debug(f"Could not get MAC address for {intf_name}: {e}")
+        
+        return None
+
     def nic_provision_delay(self) -> None:
         self.logger.debug(
             f"number of provisioned data plane interfaces is {self.num_provisioned_nics}"
@@ -722,7 +743,17 @@ class VM:
                 )
                 continue
 
-            mac = gen_mac(i)
+            # Try to get the MAC address from the container interface
+            # This ensures VM NIC MAC matches the macvlan interface MAC for proper bridge mode operation
+            intf_name = f"{self.data_intf_prefix}{i}"
+            mac = self.get_intf_mac(intf_name)
+            
+            if mac:
+                self.logger.info(f"Using container interface MAC {mac} for VM NIC {intf_name}")
+            else:
+                # Fallback to generated MAC if we can't read the container interface MAC
+                mac = gen_mac(i)
+                self.logger.debug(f"Generated MAC {mac} for VM NIC {intf_name}")
 
             res.append("-device")
             res.append(

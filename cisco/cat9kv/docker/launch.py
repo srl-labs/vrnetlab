@@ -218,7 +218,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--username", default="vrnetlab", help="Username")
     parser.add_argument("--password", default="VR-netlab9", help="Password")
-    parser.add_argument("--hostname", default="cat9kv", help="Router hostname")
+    parser.add_argument("--hostname", default="", help="Router hostname")
     parser.add_argument(
         "--connection-mode",
         default="vrxcon",
@@ -236,6 +236,18 @@ if __name__ == "__main__":
     logger.setLevel(logging.DEBUG)
     if args.trace:
         logger.setLevel(1)
+
+    # Auto-detect hostname from image filename if not provided
+    if not args.hostname:
+        for e in os.listdir("/"):
+            if re.search(r"\.qcow2$", e):
+                if re.search(r"c9800", e, re.IGNORECASE):
+                    args.hostname = "c9800cl"
+                else:
+                    args.hostname = "cat9kv"
+                break
+        if not args.hostname:
+            args.hostname = "cat9kv"
 
     vr = cat9kv(
         args.hostname,
