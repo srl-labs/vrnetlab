@@ -443,6 +443,9 @@ class VM:
         ip link set $TAP_IF up
         ip link set $TAP_IF mtu 65000
 
+        # disable IPv6 to avoid sending periodic traffic like router solicitations from the vrnetlab container
+        ip -6 addr flush $TAP_IF
+
         # create tc eth<->tap redirect rules
         tc qdisc add dev {INTF_PREFIX}$INDEX clsact
         tc filter add dev {INTF_PREFIX}$INDEX ingress flower action mirred egress redirect dev tap$INDEX
@@ -463,6 +466,9 @@ class VM:
 
         ip link set tap0 up
         ip link set tap0 mtu 65000
+
+        # disable IPv6 to avoid sending periodic traffic like router solicitations from the vrnetlab container
+        ip -6 addr flush $TAP_IF
 
         # create tc eth<->tap redirect rules
 
