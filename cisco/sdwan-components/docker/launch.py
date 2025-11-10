@@ -62,16 +62,22 @@ class Sdwan_component_vm(vrnetlab.VM):
                     elif "bond" in e_lower:
                         component_type = "validator"
 
-        # Set RAM based on component type
+        # Set RAM and SMP based on component type
         ram_map = {
-            "manager": 16384,
+            "manager": 32768,
             "controller": 4096,
             "validator": 2048,
         }
+        smp_map = {
+            "manager": "4",
+            "controller": "2",
+            "validator": "1",
+        }
         ram = ram_map.get(component_type, 4096)
+        smp = smp_map.get(component_type, "1")
 
         super(Sdwan_component_vm, self).__init__(
-            username, password, disk_image=disk_image, ram=ram
+            username, password, disk_image=disk_image, ram=ram, smp=smp
         )
 
         self.conn_mode = conn_mode
@@ -222,7 +228,7 @@ mounts:
             self.start()
             return
 
-        (ridx, match, res) = self.tn.expect([b"System Ready"], 1)
+        (ridx, match, res) = self.tn.expect([b"System Ready", b"CDB boot error"], 1)
         if match:  # got a match!
             if ridx == 0:  # System Ready
                 self.logger.debug("System Ready detected")
@@ -234,6 +240,11 @@ mounts:
                 # startup time?
                 startup_time = datetime.datetime.now() - self.start_time
                 self.logger.info("Startup complete in: %s", startup_time)
+                return
+            elif ridx == 1:  # CDB boot error
+                self.logger.error("CDB boot error detected in logs - restarting")
+                self.stop()
+                self.start()
                 return
 
         # no match, if we saw some output from the router it's probably
