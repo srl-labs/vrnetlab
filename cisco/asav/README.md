@@ -32,7 +32,7 @@ docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' my-
 docker logs -f my-asav-firewall
 
 # After the ASAv has booted, SSH to it using the configured credentials
-ssh vrnetlab@<docker-ip> # password: VR-netlab9
+ssh admin@<docker-ip> # password: CiscoAsa1!
 
 # Alternatively, you can connect to the console with telnet
 telnet <docker-ip> 5000
