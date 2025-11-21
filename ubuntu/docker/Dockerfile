@@ -1,6 +1,6 @@
 FROM public.ecr.aws/docker/library/debian:bookworm-slim AS builder
 
-ARG DISK_SIZE=4G
+ARG DISK_SIZE=40G
 
 RUN apt-get update -qy && \
    apt-get install -y --no-install-recommends qemu-utils && \
@@ -13,7 +13,7 @@ RUN qemu-img resize /$IMAGE $DISK_SIZE
 FROM public.ecr.aws/docker/library/debian:bookworm-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG DISK_SIZE=4G
+ARG DISK_SIZE=40G
 
 RUN apt-get update -qy \
    && apt-get install -y --no-install-recommends\
