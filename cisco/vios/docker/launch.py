@@ -146,73 +146,17 @@ class VIOS_vm(vrnetlab.VM):
             "timeout_ops": scrapli_timeout,
         }
 
-        v4_mgmt_address = vrnetlab.cidr_to_ddn(self.mgmt_address_ipv4)
-
-        # For switch devices, add "no switchport" to make management interface Layer 3
-        switchport_cmd = "no switchport" if self.device_type == "switch" else ""
-
-        vios_config = f"""hostname {self.hostname}
-username {self.username} privilege 15 password {self.password}
-ip domain-name example.com
-no ip domain-lookup
-!
-line con 0
-logging synchronous
-exec timeout 0 0
-!
-line vty 0 4
-logging synchronous
-login local
-transport input all
-exec timeout 0 0
-!
-ipv6 unicast-routing
-!
-vrf definition clab-mgmt
-description Containerlab management VRF (DO NOT DELETE)
-address-family ipv4
-exit
-address-family ipv6
-exit
-exit
-!
-ip route vrf clab-mgmt 0.0.0.0 0.0.0.0 {self.mgmt_gw_ipv4}
-ipv6 route vrf clab-mgmt ::/0 {self.mgmt_gw_ipv6}
-!
-interface GigabitEthernet0/0
-description Containerlab management interface
-{switchport_cmd}
-vrf forwarding clab-mgmt
-ip address {v4_mgmt_address[0]} {v4_mgmt_address[1]}
-ipv6 address {self.mgmt_address_ipv6}
-no shut
-exit
-!
-crypto key generate rsa modulus 2048
-ip ssh version 2
-!
-netconf ssh
-netconf max-sessions 16
-snmp-server community public rw
-!
-no banner exec
-no banner login
-no banner incoming
-!
-"""
-
         con = IOSXEDriver(**vios_scrapli_dev)
         con.commandeer(conn=self.scrapli_tn)
 
-        if os.path.exists(STARTUP_CONFIG_FILE):
-            self.logger.info("Startup configuration file found")
-            with open(STARTUP_CONFIG_FILE, "r") as config:
-                vios_config += config.read()
-        else:
-            self.logger.warning("User provided startup configuration is not found.")
-
-        res = con.send_configs(vios_config.splitlines())
-        res += con.send_commands(["write memory"])
+        if not os.path.exists(STARTUP_CONFIG_FILE):
+            self.logger.fatal("Failed to find startup configuration file")
+            con.close()
+            return
+        
+        with open(STARTUP_CONFIG_FILE, "r") as config:
+            res = con.send_configs(config.readlines())
+            res += con.send_commands(["write memory"])
 
         for response in res:
             self.logger.info(f"CONFIG:{response.channel_input}")
