@@ -63,6 +63,7 @@ class Sdwan_component_vm(vrnetlab.VM):
                         component_type = "validator"
 
         # Set RAM and SMP based on component type
+        # Allow environment variables to override defaults
         ram_map = {
             "manager": 32768,
             "controller": 4096,
@@ -73,8 +74,8 @@ class Sdwan_component_vm(vrnetlab.VM):
             "controller": "2",
             "validator": "1",
         }
-        ram = ram_map.get(component_type, 4096)
-        smp = smp_map.get(component_type, "1")
+        ram = int(os.environ.get("RAM", ram_map.get(component_type, 4096)))
+        smp = os.environ.get("VCPU", smp_map.get(component_type, "1"))
 
         super(Sdwan_component_vm, self).__init__(
             username, password, disk_image=disk_image, ram=ram, smp=smp
@@ -258,15 +259,7 @@ mounts:
 
         return
 
-    def gen_nics(self):
-        """Generate QEMU args for data plane NICs as tap interfaces"""
-        res = []
-        # Generate data plane NICs (p01-pXX) as tap interfaces
-        # Management NIC (p00) is handled by parent class
-        for i in range(1, self.num_nics):
-            res.extend(["-device", f"{self.nic_type},netdev=p{i:02d},mac={vrnetlab.gen_mac(i)}"])
-            res.extend(["-netdev", f"tap,ifname=p{i:02d},id=p{i:02d},script=no,downscript=no"])
-        return res
+    # No gen_nics override - use parent class implementation like c8000v does
 
     def add_disk(self, disk_size, driveif="ide"):
         additional_disk = f"disk_{disk_size}.qcow2"
@@ -309,7 +302,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--connection-mode",
-        default="vrxcon",
+        default=os.environ.get("CONNECTION_MODE", "tc"),
         help="Connection mode to use in the datapath",
     )
     args = parser.parse_args()
