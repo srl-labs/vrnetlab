@@ -74,11 +74,11 @@ class Sdwan_component_vm(vrnetlab.VM):
             "controller": "2",
             "validator": "1",
         }
-        ram = int(os.environ.get("RAM", ram_map.get(component_type, 4096)))
-        smp = os.environ.get("VCPU", smp_map.get(component_type, "1"))
 
         super(Sdwan_component_vm, self).__init__(
-            username, password, disk_image=disk_image, ram=ram, smp=smp
+            username, password, disk_image=disk_image,
+            ram=ram_map.get(component_type, 4096),
+            smp=smp_map.get(component_type, "1")
         )
 
         self.conn_mode = conn_mode
