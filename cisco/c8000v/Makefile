@@ -17,6 +17,15 @@ docker-build: MODE?=autonomous
 docker-build: docker-build-common
 	(cd docker; docker build --build-arg MODE=$(MODE) -t $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION) .)
 	$(MAKE) docker-clean-build
+	@if [ "$(MODE)" = "autonomous" ]; then \
+		echo "Running install step for autonomous mode..."; \
+		docker run --cidfile cidfile --privileged $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION) --trace --install; \
+		docker commit --change='ENTRYPOINT ["/launch.py"]' $$(cat cidfile) $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION); \
+		docker rm -f $$(cat cidfile); \
+		rm -f cidfile; \
+	else \
+		echo "Skipping install step for controller mode (serial-enabled image)"; \
+	fi
 
 # Override default to build both autonomous and controller mode variants
 docker-image:
