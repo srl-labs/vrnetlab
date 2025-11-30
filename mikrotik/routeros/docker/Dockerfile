@@ -11,6 +11,7 @@ RUN apt-get update -qy \
    python3-ipy \
    socat \
    qemu-kvm \
+   qemu-system-x86 \
    tcpdump \
    ssh \
    inetutils-ping \

@@ -4,6 +4,7 @@ import datetime
 import ftplib
 import logging
 import os
+import platform
 import re
 import signal
 import sys
@@ -52,7 +53,11 @@ class ROS_vm(vrnetlab.VM):
         for e in os.listdir("/"):
             if re.search(".vmdk$", e):
                 disk_image = "/" + e
-        super(ROS_vm, self).__init__(username, password, disk_image=disk_image, ram=256)
+
+        # the default cpu=host only works when running clab on an amd64 machine
+        extra_args = {} if platform.machine() == "x86_64" else {"cpu": "qemu64"}
+
+        super(ROS_vm, self).__init__(username, password, disk_image=disk_image, ram=256, **extra_args)
         self.qemu_args.extend(["-boot", "n"])
         self.hostname = hostname
         self.conn_mode = conn_mode
