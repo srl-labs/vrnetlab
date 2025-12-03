@@ -59,7 +59,7 @@ class Sdwan_component_vm(vrnetlab.VM):
                         component_type = "manager"
                     elif "smart" in e_lower:
                         component_type = "controller"
-                    elif "bond" in e_lower:
+                    elif "bond" in e_lower or "edge" in e_lower:
                         component_type = "validator"
 
         # Set RAM and SMP based on component type
@@ -151,6 +151,12 @@ class Sdwan_component_vm(vrnetlab.VM):
         # Build cloud-init config
         cloud_config = "#cloud-config\n"
 
+        # Vinit to define persona
+        if self.component_type == "validator":
+            cloud_config += f"""vinit:
+  personality: {config['personality']}
+"""
+
         # Add disk setup only for manager
         if self.component_type == "manager":
             cloud_config += """disk_setup:
@@ -168,6 +174,7 @@ mounts:
 - [ /dev/vda, /opt/data ]
 """
 
+
         cloud_config += "write_files:\n"
 
         # Add persona file only for manager
@@ -178,12 +185,8 @@ mounts:
   content: '{"persona":"COMPUTE_AND_DATA"}'
 """
 
-        # Add common files
-        cloud_config += f"""- path: /etc/default/personality
-  content: "{config['personality']}\\n"
-- path: /etc/default/inited
-  content: "1\\n"
-- path: /usr/share/viptela/symantec-root-ca.crt
+        # Add XML config
+        cloud_config += f"""
 - path: /etc/confd/init/zcloud.xml
   content: |
 {chr(10).join('    ' + line for line in zcloud_xml.split(chr(10)))}
@@ -198,7 +201,7 @@ mounts:
         with open("/bootstrap_config.yaml", "w") as cfg_file:
             cfg_file.write(cloud_config)
 
-        subprocess.Popen(["cloud-localds", "-v", "/" + self.image_name, "/bootstrap_config.yaml"])
+        subprocess.run(["cloud-localds", "-v", "/" + self.image_name, "/bootstrap_config.yaml"], check=True)
 
     def _load_user_config(self):
         """Load user-provided configuration if present"""
@@ -251,7 +254,7 @@ mounts:
         # no match, if we saw some output from the router it's probably
         # booting, so let's give it some more time
         if res != b"":
-            self.logger.trace("OUTPUT: %s" % res.decode())
+            self.write_to_stdout(res)
             # reset spins if we saw some output
             self.spins = 0
 
@@ -313,7 +316,7 @@ if __name__ == "__main__":
 
     logger.setLevel(logging.DEBUG)
     if args.trace:
-        logger.setLevel(1)
+        logger.setLevel(TRACE_LEVEL_NUM)
 
     vr = Sdwan_component(
         args.hostname,

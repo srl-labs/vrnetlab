@@ -8,8 +8,9 @@ IMAGE_GLOB=*.qcow2
 # viptela_vmanage_20_16_1_gen.qcow2 -> manager, 20.16.1
 # viptela_vsmart_20_16_1_gen.qcow2 -> controller, 20.16.1
 # viptela_vbond_20_16_1_gen.qcow2 -> validator, 20.16.1
-COMPONENT=$(shell echo $(IMAGE) | sed -n 's/.*[-_]v*\(manage\|smart\|bond\)[-_].*/\1/p' | sed -e 's/manage/manager/' -e 's/smart/controller/' -e 's/bond/validator/')
-VERSION=$(shell echo $(IMAGE) | sed -n 's/.*\(manage\|smart\|bond\)[-_]\([0-9][0-9._]*[0-9]\).*/\2/p' | sed -e 's/_/./g')
+# viptela-edge-20.9.3-genericx86-64.qcow2 -> validator, 20.9.3
+COMPONENT=$(shell echo $(IMAGE) | sed -n 's/.*[-_]v*\(manage\|smart\|bond\|edge\)[-_].*/\1/p' | sed -e 's/manage/manager/' -e 's/smart/controller/' -e 's/bond/validator/' -e 's/edge/validator/')
+VERSION=$(shell echo $(IMAGE) | sed -n 's/.*\(manage\|smart\|bond\|edge\)[-_]\([0-9][0-9._]*[0-9]\).*/\2/p' | sed -e 's/_/./g')
 
 
 -include ../../makefile-sanity.include
