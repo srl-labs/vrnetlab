@@ -212,6 +212,10 @@ class VMX_vcp(vrnetlab.VM):
         self.wait_write(
             "set routing-instances mgmt_junos routing-options static route 0.0.0.0/0 next-hop 10.0.0.2"
         )
+        # bind gRPC to routing instance mgmt_junos (management vrf), fix for issue #423
+        self.wait_write(
+            "set system services extension-service request-response grpc routing-instance mgmt_junos"
+        )
         self.wait_write("commit")
         self.wait_write("exit", self.COMMIT_PATTERN)
         # write another exist as sometimes the first exit from exclusive edit abrupts before command finishes
