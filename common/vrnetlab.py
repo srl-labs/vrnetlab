@@ -312,10 +312,10 @@ class VM:
             "none",
             "-machine",
             "pc",
-            "-monitor",
-            f"tcp:0.0.0.0:40{self.num:02d},server,nowait",
-            "-serial",
-            f"telnet:0.0.0.0:50{self.num:02d},server,nowait",
+            f"-chardev socket,id=monitor0,host=::,port=40{self.num:02d},server=on,wait=off",
+            "-monitor chardev:monitor0",
+            f"-chardev socket,id=serial0,host=::,port=50{self.num:02d},server=on,wait=off,telnet=on",
+            "-serial chardev:serial0",
             "-m",  # memory
             str(self.ram),
             "-cpu",  # cpu type
