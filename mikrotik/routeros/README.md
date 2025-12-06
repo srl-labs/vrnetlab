@@ -3,7 +3,7 @@
 This is the vrnetlab docker image for Mikrotik RouterOS (ROS).
 
 ## Building the docker image
-Download the Cloud Hosted Router VMDK image from https://www.mikrotik.com/download
+Download the Cloud Hosted Router (CHR) VMDK or arm64 VDI image from https://www.mikrotik.com/download
 Copy the vmdk image into this folder, then run `make docker-image`.
 
 Tested booting and responding to SSH:
@@ -11,6 +11,7 @@ Tested booting and responding to SSH:
  * chr-6.47.9.vmdk
  * chr-7.1beta5.vmdk
  * chr-7.16.2.vmdk
+ * chr-7.20.4-arm64.vdi
 
 
 ## System requirements
