@@ -51,14 +51,29 @@ logging.Logger.trace = trace
 class ROS_vm(vrnetlab.VM):
     def __init__(self, hostname, username, password, conn_mode):
         for e in os.listdir("/"):
-            if re.search(".vmdk$", e):
+            if re.search("(.vmdk|.vdi)$", e):
                 disk_image = "/" + e
 
-        # the default cpu=host only works when running clab on an amd64 machine
-        extra_args = {} if platform.machine() == "x86_64" else {"cpu": "qemu64"}
+        # determine architecture from disk image name
+        if re.search("-arm64", disk_image):
+            arch = "aarch64"
+        else:
+            arch = "x86_64"
 
-        super(ROS_vm, self).__init__(username, password, disk_image=disk_image, ram=256, **extra_args)
-        self.qemu_args.extend(["-boot", "n"])
+        if arch == "aarch64":
+            ram_size = 512 # arm64 needs more ram
+            cpu_type = "cortex-a72" # seems to be faster than cortex-a710
+        else:
+            ram_size = 256
+            cpu_type = "qemu64"
+
+        # the default cpu=host only works when running clab on an amd64 machine
+        extra_args = {} if platform.machine() == "x86_64" else {"cpu": cpu_type}
+
+        super(ROS_vm, self).__init__(username, password, disk_image=disk_image, ram=ram_size, driveif="virtio", arch=arch, **extra_args)
+        if self.arch != "aarch64":
+            self.qemu_args.extend(["-boot", "n"])
+
         self.hostname = hostname
         self.conn_mode = conn_mode
         self.nic_type = "virtio-net"  # "e1000" is default but breaks mtu > 1500 on vlan subinterfaces on RouterOS 6.x.x
@@ -89,7 +104,7 @@ class ROS_vm(vrnetlab.VM):
         res.append("-device")
 
         res.append(
-            self.nic_type + ",netdev=br-mgmt,mac=%(mac)s" % {"mac": self.get_mgmt_mac()}
+            self.nic_type + ",romfile=,netdev=br-mgmt,mac=%(mac)s" % {"mac": self.get_mgmt_mac()}
         )
         res.append("-netdev")
         res.append("bridge,br=br-mgmt,id=br-mgmt" % {"i": 0})
@@ -120,17 +135,22 @@ class ROS_vm(vrnetlab.VM):
                 elif ridx == 1:
                     self.wait_write("admin+ct", wait="RouterOS Login: ")
                 self.wait_write("", wait="Password: ")
-                self.wait_write(
-                    "n", wait="Do you want to see the software license? [Y/n]: "
-                )
+
+                # not happening on arm64
+                if self.arch != "aarch64":
+                    self.wait_write(
+                        "n", wait="Do you want to see the software license? [Y/n]: "
+                    )
 
                 # ROSv7 requires changing the password right away. ROSv6 does not require changing the password
 
-                (ridx2, match2, _) = self.tn.expect([b"new password>"], 1)
+                (ridx2, match2, _) = self.tn.expect([b"new password>"], 10)
                 if match2 and ridx2 == 0:  # got a match! login
                     self.logger.debug("ROSv7 detected, setting admin password")
                     self.wait_write(f"{self.password}", wait="new password>")
                     self.wait_write(f"{self.password}", wait="repeat new password>")
+                    changed = self.tn.read_until(b"Password changed", 10)
+                    self.logger.debug(f"Got '{changed}' for password change response")
 
                 self.logger.debug("Login completed")
 

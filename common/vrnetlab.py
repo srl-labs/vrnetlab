@@ -111,9 +111,11 @@ class VM:
         mgmt_dhcp=False,
         min_dp_nics=0,
         use_scrapli=False,
-        data_intf_prefix="eth"
+        data_intf_prefix="eth",
+        arch="x86_64",
     ):
         self.use_scrapli = use_scrapli
+        self.arch = arch
 
         # configure logging
         self.logger = logging.getLogger()
@@ -312,13 +314,15 @@ class VM:
                 ]
             )
 
+        machine = "pc" if self.arch == "x86_64" else "virt,virtualization=on -accel tcg,tb-size=128"
+
         # Build qemu args
         self.qemu_args = [
-            "qemu-system-x86_64",
+            f"qemu-system-{self.arch}",
             "-display",
             "none",
             "-machine",
-            "pc",
+            machine,
             f"-chardev socket,id=monitor0,host=::,port=40{self.num:02d},server=on,wait=off",
             "-monitor chardev:monitor0",
             f"-chardev socket,id=serial0,host=::,port=50{self.num:02d},server=on,wait=off,telnet=on",
@@ -330,6 +334,9 @@ class VM:
             "-smp",
             self.smp,  # cpu core configuration
         ]
+        if self.arch == "aarch64":
+            # Use UEFI firmware for ARM64
+            self.qemu_args.extend(["-drive", "if=pflash,unit=0,format=raw,file=/usr/share/AAVMF/AAVMF_CODE.fd,readonly=on"])
 
         # Always use -drive to create the disk device - migration requires exact device match
         self.qemu_args.extend(["-drive", f"if={driveif},file={overlay_disk_image}"])
@@ -354,7 +361,7 @@ class VM:
         self.logger.info("END ENVIRONMENT VARIABLES".center(60, "-"))
 
         self.logger.info(
-            f"Launching {self.__class__.__name__} with {self.smp} SMP/VCPU and {self.ram} M of RAM"
+            f"Launching {self.__class__.__name__} arch {self.arch} with {self.smp} SMP/VCPU and {self.ram} M of RAM"
         )
 
         # give nice colours. Red if disabled, Green if enabled
@@ -445,6 +452,9 @@ class VM:
                     self.scrapli_tn.open()
                 else:
                     self.tn = telnetlib.Telnet("127.0.0.1", 5000 + self.num)
+                    # This enables super verbose telnetlib debugging
+                    # if self.logger.isEnabledFor(logging.DEBUG):
+                    #     self.tn.set_debuglevel(2)
                 break
             except:
                 self.logger.error(
