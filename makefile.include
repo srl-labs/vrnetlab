@@ -1,8 +1,16 @@
 IMG_NAME=$(shell echo $(NAME) | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
 IMG_VENDOR=$(shell echo $(VENDOR) | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+IMG_REPOSITORY=$(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME)
 IMAGES=$(shell ls $(IMAGE_GLOB) 2>/dev/null)
 NUM_IMAGES=$(shell ls $(IMAGES) | wc -l)
 VRNETLAB_VERION=$$(git log -1 --format=format:"Commit: %H from %aD")
+
+# If DOCKER_PLATFORM is set, add --platform flag to docker build
+ifdef DOCKER_PLATFORM
+DOCKER_PLATFORM_ARG=--platform $(DOCKER_PLATFORM)
+else
+DOCKER_PLATFORM_ARG=
+endif
 
 ifeq ($(NUM_IMAGES), 0)
 docker-image: no-image usage
@@ -28,7 +36,7 @@ docker-build-image-copy:
 docker-build-common: docker-clean-build docker-pre-build
 	@if [ -z "$$IMAGE" ]; then echo "ERROR: No IMAGE specified"; exit 1; fi
 	@if [ "$(IMAGE)" = "$(VERSION)" ]; then echo "ERROR: Incorrect version string ($(IMAGE)). The regexp for extracting version information is likely incorrect, check the regexp in the Makefile or open an issue at https://github.com/hellt/vrnetlab/issues/new including the image file name you are using."; exit 1; fi
-	@echo "Building docker image using $(IMAGE) as $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION)"
+	@echo "Building docker image using $(IMAGE) as $(IMG_REPOSITORY):$(VERSION)"
 ifeq ($(DONT_COPY_COMMON), 1)
 	echo "Don't need to copy common assets"
 else
@@ -42,19 +50,26 @@ else
 endif
 	@[ -f ./vswitch.xml ] && cp vswitch.xml docker/ || true
 	$(MAKE) IMAGE=$$IMAGE docker-build-image-copy
-	(cd docker; docker build --build-arg http_proxy=$(http_proxy) --build-arg HTTP_PROXY=$(HTTP_PROXY) --build-arg https_proxy=$(https_proxy) --build-arg HTTPS_PROXY=$(HTTPS_PROXY) --build-arg IMAGE=$(IMAGE) --build-arg VERSION=$(VERSION) --label "vrnetlab-version=$(VRNETLAB_VERION)" -t $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION) .)
+	(cd docker; docker build $(DOCKER_PLATFORM_ARG) --build-arg http_proxy=$(http_proxy) --build-arg HTTP_PROXY=$(HTTP_PROXY) --build-arg https_proxy=$(https_proxy) --build-arg HTTPS_PROXY=$(HTTPS_PROXY) --build-arg IMAGE=$(IMAGE) --build-arg VERSION=$(VERSION) --label "vrnetlab-version=$(VRNETLAB_VERION)" -t $(IMG_REPOSITORY):$(VERSION) .)
 
-docker-build: docker-build-common docker-clean-build
+# Override docker-build-extra in your Makefile to run additional commands after build
+docker-build-extra: ;
+
+docker-build: docker-build-common docker-build-extra docker-clean-build
 
 docker-push:
 	for IMAGE in $(IMAGES); do \
 		$(MAKE) IMAGE=$$IMAGE docker-push-image; \
 	done
 
+# Override docker-push-image-extra in your Makefile to push additional tags
+docker-push-image-extra: ;
+
 docker-push-image:
 	@if [ -z "$$IMAGE" ]; then echo "ERROR: No IMAGE specified"; exit 1; fi
 	@if [ "$(IMAGE)" = "$(VERSION)" ]; then echo "ERROR: Incorrect version string"; exit 1; fi
-	docker push $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION)
+	docker push $(IMG_REPOSITORY):$(VERSION)
+	$(MAKE) docker-push-image-extra
 
 usage:
 	@echo "Usage: put the $(VENDOR) $(NAME) $(IMAGE_FORMAT) image in this directory and run:"
