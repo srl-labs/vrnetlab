@@ -50,7 +50,7 @@ else
 endif
 	@[ -f ./vswitch.xml ] && cp vswitch.xml docker/ || true
 	$(MAKE) IMAGE=$$IMAGE docker-build-image-copy
-	(cd docker; docker build $(DOCKER_PLATFORM_ARG) --build-arg http_proxy=$(http_proxy) --build-arg HTTP_PROXY=$(HTTP_PROXY) --build-arg https_proxy=$(https_proxy) --build-arg HTTPS_PROXY=$(HTTPS_PROXY) --build-arg IMAGE=$(IMAGE) --build-arg VERSION=$(VERSION) --label "vrnetlab-version=$(VRNETLAB_VERION)" -t $(IMG_REPOSITORY):$(VERSION) .)
+	(cd docker; docker buildx build $(DOCKER_PLATFORM_ARG) --build-arg http_proxy=$(http_proxy) --build-arg HTTP_PROXY=$(HTTP_PROXY) --build-arg https_proxy=$(https_proxy) --build-arg HTTPS_PROXY=$(HTTPS_PROXY) --build-arg IMAGE=$(IMAGE) --build-arg VERSION=$(VERSION) --label "vrnetlab-version=$(VRNETLAB_VERION)" -t $(IMG_REPOSITORY):$(VERSION) .)
 
 # Override docker-build-extra in your Makefile to run additional commands after build
 docker-build-extra: ;
