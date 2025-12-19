@@ -37,6 +37,6 @@ COPY --from=builder $IMAGE* /
 COPY *.py /
 COPY templates/ /templates/
 
-EXPOSE 22 5000 10000-10099
+EXPOSE 22 80 443 5000 10000-10099
 HEALTHCHECK CMD ["/healthcheck.py"]
 ENTRYPOINT ["/launch.py"]
