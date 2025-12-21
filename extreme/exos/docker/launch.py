@@ -194,6 +194,7 @@ class EXOS_vm(vrnetlab.VM):
         """
         self.wait_config_ready()
         self.send_cmd_wait(cmd=f"configure snmp sysName {self.hostname}")
+        self.send_cmd_wait(cmd="unconfigure vlan Mgmt ipaddress")
         self.send_cmd_wait(cmd="configure vlan Mgmt ipaddress 10.0.0.15/24")
         self.send_cmd_wait(cmd="configure iproute add default 10.0.0.2 vr VR-Mgmt")
         if self.username == "admin":
