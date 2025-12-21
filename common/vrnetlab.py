@@ -268,15 +268,22 @@ class VM:
 
         # Load snapshot metadata if restoring
         self.snapshot_metadata = None
-        if restoring_snapshot and os.path.exists(snapshot_metadata):
-            with open(snapshot_metadata, "r") as f:
-                self.snapshot_metadata = json.load(f)
-            self.logger.info(f"Loaded snapshot metadata: {self.snapshot_metadata}")
-
         if restoring_snapshot:
             self.logger.info(f"Restoring from snapshot")
             self.logger.info(f"Snapshot disk: {snapshot_disk}")
             self.logger.info(f"Snapshot state: {snapshot_state}")
+            
+            if os.path.exists(snapshot_metadata):
+                with open(snapshot_metadata, "r") as f:
+                    self.snapshot_metadata = json.load(f)
+                self.logger.info(f"Loaded snapshot metadata: {self.snapshot_metadata}")
+
+                # Restore secondary disks
+                if "secondary_disks" in self.snapshot_metadata:
+                    for disk in self.snapshot_metadata["secondary_disks"]:
+                        self.logger.info(f"Restoring secondary disk: {disk}")
+                        shutil.copy2(os.path.join(f"/snapshot-data/vm{self.num}", disk), disk)
+            
             overlay_disk_image = f"/snapshot-data/vm{self.num}/disk-overlay.qcow2"
             base_disk = snapshot_disk
             base_format = "qcow2"
@@ -457,15 +464,9 @@ class VM:
         snapshot_state = f"/snapshot-data/vm{self.num}/state.img"
         if os.path.exists(snapshot_state):
             self.logger.info("Resuming VM after snapshot restore")
-            if self.use_scrapli:
-                self.scrapli_qm.channel.write("cont\r")
-            else:
-                self.qm.write(b"cont\r")
-            time.sleep(2)
-            self.logger.info("VM resumed")
-            # Mark VM as running - snapshot restored a fully booted VM
-            self.running = True
-            self.logger.info("VM marked as running (restored from snapshot)")
+            self._qemu_monitor_cmd("cont")
+        
+        # Mark VM as running - snapshot restored a fully booted VM
 
             # Close serial console connection to free it for external access
             try:
@@ -1027,65 +1028,94 @@ class VM:
         sys.stdout.buffer.write(bytes)
         sys.stdout.buffer.flush()
 
-    def _get_overlay_path(self):
-        """Helper to get current overlay disk path."""
+    def _get_disk_paths(self):
+        """Helper to get all disk paths from qemu args."""
+        disk_paths = []
         for i, arg in enumerate(self.qemu_args):
             if arg == "-drive":
                 drive_spec = self.qemu_args[i + 1]
                 for part in drive_spec.split(","):
                     if part.startswith("file="):
-                        return part.split("=", 1)[1]
-        raise Exception("Could not find overlay disk path")
+                        path = part.split("=", 1)[1]
+                        disk_paths.append(path)
+        return disk_paths
+
+    def _qemu_monitor_cmd(self, cmd, wait=False):
+        """Send command to QEMU monitor. Returns output if wait is True."""
+        try:
+            if self.use_scrapli:
+                self.scrapli_qm.channel.write(f"{cmd}\r")
+            else:
+                self.qm.write(f"{cmd}\r".encode())
+
+            if wait:
+                time.sleep(0.5)
+                if self.use_scrapli:
+                    return self.scrapli_qm.channel.read().decode()
+                else:
+                    return self.qm.read_very_eager().decode()
+            return None
+        except Exception as e:
+            self.logger.error(f"Failed to communicate with QEMU monitor: {e}")
+            raise
 
     def snapshot_save_to_dir(self, vm_dir):
         """Save VM state to directory using QEMU migrate to file."""
         os.makedirs(vm_dir, exist_ok=True)
 
         state_file = os.path.join(vm_dir, "state.img")
-        disk_file = os.path.join(vm_dir, "disk.qcow2")
-        overlay_path = self._get_overlay_path()
-
+        
         try:
             # Pause VM
             self.logger.info(f"Pausing VM {self.num}")
-            if self.use_scrapli:
-                self.scrapli_qm.channel.write("stop\r")
-            else:
-                self.qm.write(b"stop\r")
+            self._qemu_monitor_cmd("stop")
             time.sleep(1)
 
-            # Dump state via migration
+            # Start migration
             self.logger.info(f"Saving state for VM {self.num}")
-            cmd = f'migrate "exec:cat > {state_file}"\r'
-            if self.use_scrapli:
-                self.scrapli_qm.channel.write(cmd)
-            else:
-                self.qm.write(cmd.encode())
+            self._qemu_monitor_cmd("migrate_set_parameter max-bandwidth 100000000000")
+            self._qemu_monitor_cmd(f'migrate "exec:cat > {state_file}"')
 
             # Wait for migration complete
-            timeout = 300
+            timeout = 600
             start = time.time()
             while time.time() - start < timeout:
                 time.sleep(2)
-                if self.use_scrapli:
-                    self.scrapli_qm.channel.write("info migrate\r")
-                else:
-                    self.qm.write(b"info migrate\r")
-                time.sleep(0.5)
-
-                if self.use_scrapli:
-                    response = self.scrapli_qm.channel.read().decode()
-                else:
-                    response = self.qm.read_very_eager().decode()
+                response = self._qemu_monitor_cmd("info migrate", wait=True)
 
                 if "completed" in response:
                     break
                 elif "failed" in response:
-                    raise Exception("Migration failed")
+                    self.logger.error(f"Migration failed. Status: {response}")
+                    raise Exception(f"Migration failed details: {response}")
 
-            # Copy disk
-            self.logger.info(f"Copying disk for VM {self.num}")
-            shutil.copy2(overlay_path, disk_file)
+            # Copy disks
+            disks = self._get_disk_paths()
+            secondary_disks = []
+            
+            # Helper for parallel copy
+            def _copy_disk(source, dest, desc):
+                self.logger.info(f"Copying {desc} disk {source} to {dest}")
+                subprocess.check_call(["cp", "--sparse=always", source, dest])
+
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = []
+                for i, disk_source in enumerate(disks):
+                    if i == 0:
+                        disk_dest_name = "disk.qcow2"
+                        desc = "primary"
+                    else:
+                        disk_dest_name = os.path.basename(disk_source)
+                        secondary_disks.append(disk_dest_name)
+                        desc = "secondary"
+                    
+                    dest_path = os.path.join(vm_dir, disk_dest_name)
+                    futures.append(executor.submit(_copy_disk, disk_source, dest_path, desc))
+                
+                # Wait for all copies to complete
+                for future in concurrent.futures.as_completed(futures):
+                    future.result()  # Raises exception if copy failed
 
             # Save metadata (MAC addresses for NICs) to restore devices correctly
             metadata_file = os.path.join(vm_dir, "metadata.json")
@@ -1093,20 +1123,14 @@ class VM:
                 "mac_addresses": [],
                 "num_nics": self.num_nics,
                 "provision_pci_bus": self.provision_pci_bus,
-                "nics_per_pci_bus": self.nics_per_pci_bus
+                "nics_per_pci_bus": self.nics_per_pci_bus,
+                "secondary_disks": secondary_disks
             }
 
             # Extract MAC addresses from QEMU via "info network" command
             try:
-                if self.use_scrapli:
-                    self.scrapli_qm.channel.write("info network\r")
-                    time.sleep(0.5)
-                    response = self.scrapli_qm.channel.read().decode()
-                else:
-                    self.qm.write(b"info network\r")
-                    time.sleep(0.5)
-                    response = self.qm.read_very_eager().decode()
-
+                response = self._qemu_monitor_cmd("info network", wait=True)
+                
                 # Extract MAC addresses using regex pattern
                 mac_pattern = r'macaddr=([0-9a-f:]{17})'
                 macs = re.findall(mac_pattern, response, re.IGNORECASE)
@@ -1121,20 +1145,14 @@ class VM:
 
             # Resume VM
             self.logger.info(f"Resuming VM {self.num}")
-            if self.use_scrapli:
-                self.scrapli_qm.channel.write("cont\r")
-            else:
-                self.qm.write(b"cont\r")
+            self._qemu_monitor_cmd("cont")
 
-            return {"state": state_file, "disk": disk_file, "metadata": metadata_file}
+            return {"state": state_file, "disk": os.path.join(vm_dir, "disk.qcow2"), "metadata": metadata_file}
 
         except Exception as e:
             # Always try to resume
             try:
-                if self.use_scrapli:
-                    self.scrapli_qm.channel.write("cont\r")
-                else:
-                    self.qm.write(b"cont\r")
+                self._qemu_monitor_cmd("cont")
             except:
                 pass
             raise Exception(f"Snapshot failed for VM {self.num}: {e}")
@@ -1338,10 +1356,7 @@ class VR:
                 for vm in self.vms:
                     if (str(vm.num) in vm_num_list) or not fcontent:
                         try:
-                            if vm.use_scrapli:
-                                vm.scrapli_qm.channel.write("system_reset\r")
-                            else:
-                                vm.qm.write("system_reset\r".encode())
+                            vm._qemu_monitor_cmd("system_reset")
                             self.logger.debug(
                                 f"Sent qemu-monitor system_reset to VM num {vm.num} "
                             )
