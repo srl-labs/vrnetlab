@@ -156,10 +156,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("--trace", action="store_true", help="enable trace level logging")
     parser.add_argument("--hostname", default="vr-exos", help="Router hostname")
-    parser.add_argument("--username", default="admin", help="Username")
-    parser.add_argument("--password", default="admin@123", help="Password")
-    # parser.add_argument('--username', default='vrnetlab', help='Username')
-    # parser.add_argument('--password', default='VR-netlab9', help='Password')
+    parser.add_argument('--username', default='vrnetlab', help='Username')
+    parser.add_argument('--password', default='VR-netlab9', help='Password')
     parser.add_argument(
         "--connection-mode",
         default="tc",
