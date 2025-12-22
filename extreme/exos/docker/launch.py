@@ -59,6 +59,37 @@ class EXOS_vm(vrnetlab.VM):
         self.num_nics = 13
         self.nic_type = "rtl8139"
 
+    def wait_write_config(self, cmd, wait="#", retries=30, delay=5):
+        """Execute command with retry logic for 'configuration load' state.
+        
+        EXOS can enter a 'configuration load' state during boot where config
+        commands are rejected. This wrapper retries the command until success.
+        """
+        for attempt in range(retries):
+            self.tn.write(f"{cmd}\r".encode())
+            try:
+                res = self.tn.read_until(wait.encode(), timeout=30)
+                response_str = res.decode(errors="ignore")
+                
+                # Check if we got the config load error
+                if "configuration load" in response_str.lower():
+                    if attempt < retries - 1:  # Don't log on last attempt
+                        self.logger.info(
+                            f"'configuration load' detected, retrying '{cmd}' in {delay}s..."
+                        )
+                    time.sleep(delay)
+                    continue
+                    
+                # Success - command completed
+                return
+            except Exception as e:
+                self.logger.warning(f"Timeout waiting for prompt after '{cmd}': {e}")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                continue
+                
+        self.logger.error(f"Command '{cmd}' failed after {retries} retries")
+
     def bootstrap_spin(self):
         """ This function should be called periodically to do work.
         """
@@ -114,10 +145,10 @@ class EXOS_vm(vrnetlab.VM):
     def bootstrap_config(self):
         """ Do the actual bootstrap config
         """
-        self.wait_write(cmd=f"configure snmp sysName {self.hostname}", wait="#")
-        self.wait_write(cmd="unconfigure vlan Mgmt ipaddress", wait="#")
-        self.wait_write(cmd="configure vlan Mgmt ipaddress 10.0.0.15/24", wait="#")
-        self.wait_write(cmd="configure iproute add default 10.0.0.2 vr VR-Mgmt", wait="#")
+        self.wait_write_config(cmd=f"configure snmp sysName {self.hostname}")
+        self.wait_write_config(cmd="unconfigure vlan Mgmt ipaddress")
+        self.wait_write_config(cmd="configure vlan Mgmt ipaddress 10.0.0.15/24")
+        self.wait_write_config(cmd="configure iproute add default 10.0.0.2 vr VR-Mgmt")
         if self.username == "admin":
             self.wait_write(cmd="configure account admin password", wait="#")
             self.wait_write(cmd="", wait="Current user's password:")
@@ -127,10 +158,10 @@ class EXOS_vm(vrnetlab.VM):
             self.wait_write(
                 cmd=f"create account admin {self.username} {self.password}", wait="#"
             )
-        self.wait_write(cmd="disable cli prompting", wait="#")
-        self.wait_write(cmd="configure ssh2 key", wait="#")
-        self.wait_write(cmd="enable ssh2", wait="#")
-        self.wait_write(cmd="save", wait="#")
+        self.wait_write_config(cmd="disable cli prompting")
+        self.wait_write_config(cmd="configure ssh2 key")
+        self.wait_write_config(cmd="enable ssh2")
+        self.wait_write_config(cmd="save")
 
     def startup_config(self):
         if not os.path.exists(STARTUP_CONFIG_FILE):
