@@ -8,6 +8,9 @@ RUN mkdir -p /disk
 COPY $IMAGE* /disk/flash.qcow2
 COPY *.py /
 
+RUN chmod +x /launch.py /healthcheck.py
+
 EXPOSE 22 443 5000 10000-10099
-HEALTHCHECK CMD ["/healthcheck.py"]
-ENTRYPOINT ["/launch.py"]
+EXPOSE 8443
+HEALTHCHECK CMD ["uv", "run", "/healthcheck.py"]
+ENTRYPOINT ["uv", "run", "/launch.py"]
