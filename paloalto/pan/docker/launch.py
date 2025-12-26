@@ -7,11 +7,16 @@ import re
 import signal
 import sys
 import time
+import requests
+import urllib3
+import xml.etree.ElementTree as ET
+
 
 import vrnetlab
 
 
 STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
+SAVED_CONFIG_FILE = "/config/device-state.tgz"
 
 
 def handle_SIGCHLD(signal, frame):
@@ -112,6 +117,8 @@ class PAN_vm(vrnetlab.VM):
                 # run main config!
                 self.bootstrap_config()
                 self.startup_config()
+                # Apply saved device-state if it exists
+                self.apply_saved_configuration()
                 # close telnet connection
                 self.tn.close()
                 # startup time?
@@ -203,6 +210,111 @@ class PAN_vm(vrnetlab.VM):
         self.wait_write("commit", "#")
         self.wait_write("exit", "#")
 
+    def panos_api_login(self):
+        """Login to the PanOS API to get an API token to save/load configs"""
+        resp = requests.post(
+            f"https://127.0.0.1/api/?type=keygen&user={self.username}&password={self.password}",
+            verify=False,
+        )
+        tree = ET.fromstring(resp.content)
+        key_elem = tree.find('.//result/key')
+        key_value = key_elem.text if key_elem is not None else None
+        assert key_value is not None, "API key not found in response"
+        return key_value
+    
+    def panos_import_configuration(self, api_key: str):
+        """Step 1 of 3 to use the saved device-state tgz. Load the file into the filesystem of the PanOS VM."""
+        url = f"https://127.0.0.1/api/?type=import&category=device-state&key={api_key}"
+        with open(SAVED_CONFIG_FILE, "rb") as f:
+            files = {
+                "file": (os.path.basename(SAVED_CONFIG_FILE), f, "application/gzip"),
+            }
+            resp = requests.post(url, files=files, verify=False, timeout=60)
+        root = ET.fromstring(resp.content)
+        status = root.get("status")
+        if status != "success":
+            self.logger.error(f"Import configuration API call failed with status: {status}")
+            self.logger.debug(f"Response content: {resp.content.decode()}")
+        return True
+    
+    def panos_load_configuration(self, api_key: str):
+        """Step 2 of 3 to use the saved device-state tgz. Load the imported configuration into the running config."""
+        cmd = "<load><device-state></device-state></load>"
+        url = f"https://127.0.0.1/api/?type=op&key={api_key}"
+        resp = requests.post(url, data={"cmd": cmd}, timeout=60, verify=False)
+        root = ET.fromstring(resp.content)
+        status = root.get("status")
+        if status != "success":
+            self.logger.error(f"Load configuration API call failed with status: {status}")
+            self.logger.debug(f"Response content: {resp.content.decode()}")
+        return True
+    
+    def panos_commit_configuration(self, api_key: str, description: str = "vrnetlab saved config"):
+        """Step 3 of 3 to use the saved device-state tgz. Commit the loaded configuration."""
+        url = f"https://127.0.0.1/api/?type=commit&key={api_key}"
+        cmd = f"<commit><description>{description}</description></commit>"
+        resp = requests.post(url, data={"cmd": cmd}, verify=False, timeout=60)
+        root = ET.fromstring(resp.content)
+        status = root.get("status")
+        if status != "success":
+            self.logger.error(f"Commit configuration API call failed with status: {status}")
+            self.logger.debug(f"Response content: {resp.content.decode()}")
+        commit_job_id = resp.text.split('jobid')[1].split('<')[0].split()[0]
+        self.logger.info(f"Configuration commit started with job ID: {commit_job_id}")
+        return commit_job_id
+    
+    def check_config_commit_status(self, api_key: str, job_id: str):
+        """Check the status of a configuration commit job."""
+        url = f"https://127.0.0.1/api/?type=op&key={api_key}"
+        cmd = f"<show><jobs><id>{job_id}</id></jobs></show>"
+        resp = requests.post(url, data={"cmd": cmd}, verify=False, timeout=60)
+        return resp.text
+    
+    def apply_saved_configuration(self):
+        """Logic and API calls to apply saved device-state tgz if it exists."""
+        if not os.path.exists(SAVED_CONFIG_FILE):
+            self.logger.trace(f"Saved config file {SAVED_CONFIG_FILE} is not found")
+            return
+        # Palo generates a self-signed cert for API, no need to flood stderr with junk
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        self.logger.trace(f"Saved device state file {SAVED_CONFIG_FILE} exists")
+
+        self.logger.info(f"Applying saved device state from {SAVED_CONFIG_FILE}")
+
+        api_key = self.panos_api_login()
+        self.logger.info("Logged into PanOS API")
+
+        self.panos_import_configuration(api_key)
+        self.logger.info("Imported device state into PanOS VM")
+
+        self.panos_load_configuration(api_key)
+        self.logger.info("Loaded device state into running config")
+
+        commit_job_id = self.panos_commit_configuration(api_key)
+        self.logger.info("Committed configuration changes")
+        time.sleep(10)
+
+        # Check commit status since it can take a hot minute
+        for attempt in range(30):
+            status_response = self.check_config_commit_status(api_key, commit_job_id)
+            root = ET.fromstring(status_response)
+            status_elem = root.find('.//job/status')
+            progress_elem = root.find('.//job/progress')
+            job_status = status_elem.text if status_elem is not None else None
+            job_progress = progress_elem.text if progress_elem is not None else None
+            if job_status == "FIN":
+                self.logger.info("Configuration commit completed successfully")
+                break
+            elif job_status == "PEND":
+                self.logger.info(f"Configuration commit still pending in queue, waiting...")
+                time.sleep(10)
+            elif job_status == "ACT":
+                self.logger.info(f"Configuration commit in progress: {job_progress}% complete")
+                time.sleep(10)
+            else:
+                self.logger.error(f"Unknown job status: {job_status}")
+                break    
 
 class PAN(vrnetlab.VR):
     def __init__(self, hostname, username, password, conn_mode):

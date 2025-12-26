@@ -16,6 +16,7 @@ with the following images:
  * PA-VNM-KVM-7.0.1.qcow2
  * PA-VNM-KVM-9.1.9.qcow2
  * PA-VNM-KVM-10.0.6.qcow2
+ * PA-VM-KVM-11.2.3-h3.qcow2
 
 
 ## System requirements
