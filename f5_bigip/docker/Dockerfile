@@ -10,7 +10,6 @@ COPY *.py /
 
 RUN chmod +x /launch.py /healthcheck.py
 
-EXPOSE 22 443 5000 10000-10099
-EXPOSE 8443
+EXPOSE 22 443 5000 8443 10000-10099
 HEALTHCHECK CMD ["uv", "run", "/healthcheck.py"]
 ENTRYPOINT ["uv", "run", "/launch.py"]
