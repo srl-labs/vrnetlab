@@ -48,6 +48,7 @@ def env_int(name, default):
 
 
 def make_cidata_iso(seed_dir, mgmt_ipv4, mgmt_gw, hostname, admin_password, root_password):
+    """Build cloud-init seed ISO used for day0 config (mgmt IP/route + creds)."""
     default_user_data = textwrap.dedent(
         f"""\
         #cloud-config
@@ -252,7 +253,7 @@ class F5BigIPVM(vrnetlab.VM):
         return False
 
     def configure_mgmt_via_console(self):
-        """If initial password change blocks cloud-init, drive the console once and apply mgmt settings."""
+        """Drive console once to handle forced password change and apply mgmt IP/route if cloud-init could not."""
         if self.console_provisioned:
             return
         if not self.mgmt_address_ipv4 or self.mgmt_address_ipv4 == "dhcp":
