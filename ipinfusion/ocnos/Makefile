@@ -9,7 +9,8 @@ IMAGE_GLOB=*.qcow2
 
 # match versions like:
 # OcNOS-SP-PLUS-x86-6.5.2-101-GA.qcow2
-VERSION=$(shell echo $(IMAGE) | sed -rn 's/OcNOS-SP-PLUS-x86-(.+)-GA.qcow2/\1/p')
+#VERSION=$(shell echo $(IMAGE) | sed -rn 's/OcNOS-SP-PLUS-x86-(.+)-GA.qcow2/\1/p')
+VERSION=$(shell echo $(IMAGE) | sed -rn 's/OcNOS-SP-PLUS-x86-(.+)-(GA|MR).qcow2/\1/p')
 
 -include ../../makefile-sanity.include
 -include ../../makefile.include
