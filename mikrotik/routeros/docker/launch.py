@@ -61,7 +61,7 @@ class ROS_vm(vrnetlab.VM):
             arch = "x86_64"
 
         if arch == "aarch64":
-            ram_size = 512 # arm64 needs more ram
+            ram_size = 320 # arm64 needs more ram
             cpu_type = "cortex-a72" # seems to be faster than cortex-a710
         else:
             ram_size = 256
