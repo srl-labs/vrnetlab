@@ -334,9 +334,6 @@ class VM:
             "-smp",
             self.smp,  # cpu core configuration
         ]
-        if self.arch == "aarch64":
-            # Use UEFI firmware for ARM64
-            self.qemu_args.extend(["-drive", "if=pflash,unit=0,format=raw,file=/usr/share/AAVMF/AAVMF_CODE.fd,readonly=on"])
 
         # Always use -drive to create the disk device - migration requires exact device match
         self.qemu_args.extend(["-drive", f"if={driveif},file={overlay_disk_image}"])

@@ -73,6 +73,9 @@ class ROS_vm(vrnetlab.VM):
         super(ROS_vm, self).__init__(username, password, disk_image=disk_image, ram=ram_size, driveif="virtio", arch=arch, **extra_args)
         if self.arch != "aarch64":
             self.qemu_args.extend(["-boot", "n"])
+        if self.arch == "aarch64":
+            # Use UEFI firmware for ARM64
+            self.qemu_args.extend(["-drive", "if=pflash,unit=0,format=raw,file=/usr/share/AAVMF/AAVMF_CODE.fd,readonly=on"])
 
         self.hostname = hostname
         self.conn_mode = conn_mode
