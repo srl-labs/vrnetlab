@@ -1381,15 +1381,15 @@ class SROS_integrated(SROS_vm):
                 f"type=1,product=TIMOS:address={self.mgmt_address_ipv4}@active "
                 f"address={self.mgmt_address_ipv6}@active "
                 f"license-file=tftp://{self.mgmt_gw_ipv4}/"
-                f"license.txt primary-config=tftp://{self.mgmt_gw_ipv4}/config.txt system-base-mac={vrnetlab.gen_mac(0)} "
-                f"{variant['timos_line']}"
+                f"license.txt primary-config=tftp://{self.mgmt_gw_ipv4}/config.txt "
+                f"{'' if 'system-base-mac=' in variant['timos_line'] else f'system-base-mac={vrnetlab.gen_mac(0)} '} {variant['timos_line']}"
             ]
         else:
             self.smbios = [
                 f"type=1,product=TIMOS:address={SROS_MGMT_V4_ADDR}/{V4_PREFIX_LENGTH}@active "
                 f"address={SROS_MGMT_V6_ADDR}/{V6_PREFIX_LENGTH}@active license-file=tftp://{BRIDGE_V4_ADDR}/"
-                f"license.txt primary-config=tftp://{BRIDGE_V4_ADDR}/config.txt system-base-mac={vrnetlab.gen_mac(0)} "
-                f"{variant['timos_line']}"
+                f"license.txt primary-config=tftp://{BRIDGE_V4_ADDR}/config.txt "
+                f"{'' if 'system-base-mac=' in variant['timos_line'] else f'system-base-mac={vrnetlab.gen_mac(0)} '} {variant['timos_line']}"
             ]
         self.logger.info("Acting timos line: {}".format(self.smbios))
         self.variant = variant
@@ -1473,8 +1473,8 @@ class SROS_cp(SROS_vm):
                 f"type=1,product=TIMOS:address={self.mgmt_address_ipv4}@active "
                 f"address={self.mgmt_address_ipv6}@active "
                 f"license-file=tftp://{self.mgmt_gw_ipv4}/"
-                f"license.txt primary-config=tftp://{self.mgmt_gw_ipv4}/config.txt system-base-mac={vrnetlab.gen_mac(0)} "
-                f"{variant['cp']['timos_line']}"
+                f"license.txt primary-config=tftp://{self.mgmt_gw_ipv4}/config.txt "
+                f"{'' if 'system-base-mac=' in variant['cp']['timos_line'] else f'system-base-mac={vrnetlab.gen_mac(0)} '} {variant['cp']['timos_line']}"
             ]
         else:
             self.smbios = [
@@ -1482,7 +1482,7 @@ class SROS_cp(SROS_vm):
                 f"address={SROS_MGMT_V6_ADDR}/{V6_PREFIX_LENGTH}@active "
                 f"license-file=tftp://{BRIDGE_V4_ADDR}/license.txt "
                 f"primary-config=tftp://{BRIDGE_V4_ADDR}/config.txt "
-                f"system-base-mac={vrnetlab.gen_mac(0)} {variant['cp']['timos_line']}"
+                f"{'' if 'system-base-mac=' in variant['cp']['timos_line'] else f'system-base-mac={vrnetlab.gen_mac(0)} '} {variant['cp']['timos_line']}"
             ]
         self.logger.info("Acting timos line: {}".format(self.smbios))
 
