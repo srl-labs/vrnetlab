@@ -7,9 +7,9 @@ VRNETLAB_VERION=$$(git log -1 --format=format:"Commit: %H from %aD")
 
 # If DOCKER_PLATFORM is set, add --platform flag to docker build
 ifdef DOCKER_PLATFORM
-DOCKER_PLATFORM_ARG=--platform $(DOCKER_PLATFORM)
+DOCKER_BUILD_CMD=docker buildx build --platform $(DOCKER_PLATFORM)
 else
-DOCKER_PLATFORM_ARG=
+DOCKER_BUILD_CMD=docker build
 endif
 
 ifeq ($(NUM_IMAGES), 0)
@@ -50,7 +50,7 @@ else
 endif
 	@[ -f ./vswitch.xml ] && cp vswitch.xml docker/ || true
 	$(MAKE) IMAGE=$$IMAGE docker-build-image-copy
-	(cd docker; docker buildx build $(DOCKER_PLATFORM_ARG) --build-arg http_proxy=$(http_proxy) --build-arg HTTP_PROXY=$(HTTP_PROXY) --build-arg https_proxy=$(https_proxy) --build-arg HTTPS_PROXY=$(HTTPS_PROXY) --build-arg IMAGE=$(IMAGE) --build-arg VERSION=$(VERSION) --label "vrnetlab-version=$(VRNETLAB_VERION)" -t $(IMG_REPOSITORY):$(VERSION) .)
+	(cd docker; $(DOCKER_BUILD_CMD) --build-arg http_proxy=$(http_proxy) --build-arg HTTP_PROXY=$(HTTP_PROXY) --build-arg https_proxy=$(https_proxy) --build-arg HTTPS_PROXY=$(HTTPS_PROXY) --build-arg IMAGE=$(IMAGE) --build-arg VERSION=$(VERSION) --label "vrnetlab-version=$(VRNETLAB_VERION)" -t $(IMG_REPOSITORY):$(VERSION) .)
 
 # Override docker-build-extra in your Makefile to run additional commands after build
 docker-build-extra: ;
