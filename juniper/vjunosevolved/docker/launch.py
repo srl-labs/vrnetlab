@@ -167,19 +167,20 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
 
                 # Login
                 self.wait_write("\r", None)
-                self.wait_write("admin", wait=f"{self.hostname} login:")
-                self.wait_write(self.password, wait="Password:")
-                self.wait_write("\r", None)
-                self.logger.info("Login completed")
 
-                # close telnet connection
-                self.tn.close()
-                # startup time?
-                startup_time = datetime.datetime.now() - self.start_time
-                self.logger.info("Startup complete in: %s" % startup_time)
-                # mark as running
-                self.running = True
-                return
+                _, loginMatch, _ = self.tn.expect([f"{self.hostname} login:".encode("utf-8")])
+                if loginMatch:
+
+                    self.logger.info("Login prompt found")
+
+                    # close telnet connection
+                    self.tn.close()
+                    # startup time?
+                    startup_time = datetime.datetime.now() - self.start_time
+                    self.logger.info("Startup complete in: %s" % startup_time)
+                    # mark as running
+                    self.running = True
+                    return
 
         # no match, if we saw some output from the router it's probably
         # booting, so let's give it some more time

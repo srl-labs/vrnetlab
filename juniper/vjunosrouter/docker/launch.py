@@ -138,19 +138,20 @@ class VJUNOSROUTER_vm(vrnetlab.VM):
 
                 # Login
                 self.wait_write("\r", None)
-                self.wait_write("admin", wait="login:")
-                self.wait_write(self.password, wait="Password:")
-                self.wait_write("\r", None)
-                self.logger.info("Login completed")
 
-                # close telnet connection
-                self.tn.close()
-                # startup time?
-                startup_time = datetime.datetime.now() - self.start_time
-                self.logger.info("Startup complete in: %s" % startup_time)
-                # mark as running
-                self.running = True
-                return
+                _, loginMatch, _ = self.tn.expect([b"login:"], 1)
+                if loginMatch:
+
+                    self.logger.info("Login prompt found")
+
+                    # close telnet connection
+                    self.tn.close()
+                    # startup time?
+                    startup_time = datetime.datetime.now() - self.start_time
+                    self.logger.info("Startup complete in: %s" % startup_time)
+                    # mark as running
+                    self.running = True
+                    return
 
         # no match, if we saw some output from the router it's probably
         # booting, so let's give it some more time
