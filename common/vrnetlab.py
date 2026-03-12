@@ -1434,3 +1434,23 @@ def format_bool_color(bool_var: bool, text_if_true: str, text_if_false: str) -> 
         if bool_var
         else f"\x1b[31m{text_if_false}\x1b[0m"
     )
+
+
+def getenv_uint(key: str, default: int) -> int:
+    """
+    Get the environment variable key and convert it into an int.
+
+    Returns default if key doesn't exist, isn't a non-negative integer or cannot
+    be converted into an int.
+    """
+    env_value = os.getenv(key)
+
+    if env_value is not None:
+        if env_value.isdecimal():
+            return int(env_value)
+        else:
+            logging.getLogger().warning(
+                f"Invalid value in {key}. Expected a non-negative integer: {env_value}"
+            )
+
+    return default

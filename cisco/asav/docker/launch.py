@@ -109,7 +109,7 @@ class ASAv_vm(vrnetlab.VM):
         """Apply the full configuration"""
         self.logger.debug("Applying bootstrap configuration")
 
-        scrapli_timeout = os.getenv("SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT)
+        scrapli_timeout = vrnetlab.getenv_uint("SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT)
 
         def _open(conn):
             """Set the internal privilege level to 'exec' so scrapli knows what to do"""
