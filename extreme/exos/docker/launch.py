@@ -50,7 +50,6 @@ class EXOS_vm(vrnetlab.VM):
             password,
             disk_image=disk_image,
             ram=512,
-            cpu="core2duo",
             driveif="ide",
         )
 
