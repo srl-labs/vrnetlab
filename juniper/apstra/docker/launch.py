@@ -15,10 +15,11 @@
 #    The default vrnetlab value (4 GB) will cause the VM to crash or boot
 #    into a severely degraded state.  We default to 16 384 MB.
 #
-# 3. NO CLI bootstrap    – Apstra is configured exclusively through its
-#    Web UI / REST API.  We must NOT attempt to send CLI commands over the
-#    serial console.  bootstrap_spin() simply waits for a login prompt and
-#    then marks the VM as running.
+# 3. NO CLI bootstrap    – Apstra is initially configured using SSH and
+#    the Apstra Server first boot configuration tool (aos-config).  
+#    We must NOT attempt to send CLI commands over the serial console.
+#    bootstrap_spin() simply waits for a login prompt and then marks the
+#    VM as running.
 #
 # 4. LONG boot timeout   – First boot can take 8–10 minutes as Apstra
 #    initialises its internal PostgreSQL database and services.
@@ -124,8 +125,8 @@ class Apstra_vm(vrnetlab.VM):
             self.mgmt_tcp_ports.append(port)
 
         # ── persistent overlay ────────────────────────────────────────────────
-        if os.path.isdir("/state"):
-            persistent_overlay = "/state/apstra_overlay.qcow2"
+        if os.path.isdir("/config"):
+            persistent_overlay = "/config/apstra_overlay.qcow2"
 
             if not os.path.exists(persistent_overlay):
                 vrnetlab.run_command([
@@ -154,7 +155,7 @@ class Apstra_vm(vrnetlab.VM):
                     break
         else:
             self.logger.warning(
-                "/state not mounted — overlay is ephemeral and will not "
+                "/config not mounted — overlay is ephemeral and will not "
                 "survive clab destroy. Create the bind-mount directory to "
                 "enable persistence."
             )
