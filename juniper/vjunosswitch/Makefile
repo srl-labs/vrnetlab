@@ -11,5 +11,24 @@ IMAGE_GLOB=*.qcow2
 
 VERSION=$(shell echo $(IMAGE) | sed -e 's/vjunos-switch-//i' | sed -e 's/.qcow2//i')
 
+.PHONY: enable-amd-svm-on-images all
+
+all: enable-amd-svm-on-images
+    $(MAKE) docker-image
+
 -include ../../makefile-sanity.include
 -include ../../makefile.include
+
+IMAGES=$(shell ls $(IMAGE_GLOB) 2>/dev/null)
+
+enable-amd-svm-on-images:
+    docker pull vistagg/vjunos-amd-enabler:latest
+    for IMAGE in $(IMAGES); do \
+        echo "Enabling AMD SVM flags on $$IMAGE"; \
+        docker run --rm \
+            --cap-add SYS_ADMIN \
+            --device /dev/kvm \
+            -v "$$(pwd)/$$IMAGE:/vJunos.qcow2:rw" \
+            vistagg/vjunos-amd-enabler; \
+        done
+        docker rmi vistagg/vjunos-amd-enabler:latest || true
