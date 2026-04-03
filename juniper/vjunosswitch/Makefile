@@ -22,13 +22,13 @@ all: enable-amd-svm-on-images
 IMAGES=$(shell ls $(IMAGE_GLOB) 2>/dev/null)
 
 enable-amd-svm-on-images:
-	docker pull vistagg/vjunos-amd-enabler:latest
+	docker pull ghcr.io/birbnetworks/vjunos-amd-enable:latest
 	for IMAGE in $(IMAGES); do \
 		echo "Enabling AMD SVM flags on $$IMAGE"; \
 		docker run --rm \
 			--cap-add SYS_ADMIN \
 			--device /dev/kvm \
 			-v "$$(pwd)/$$IMAGE:/vJunos.qcow2:rw" \
-			vistagg/vjunos-amd-enabler; \
+			ghcr.io/birbnetworks/vjunos-amd-enable:latest; \
 	done
-	docker rmi vistagg/vjunos-amd-enabler:latest || true
+	docker rmi ghcr.io/birbnetworks/vjunos-amd-enable:latest || true
