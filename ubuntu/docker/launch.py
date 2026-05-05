@@ -7,9 +7,13 @@ import re
 import signal
 import subprocess
 import sys
+import yaml
 
 import vrnetlab
 
+# Path to custom cloud-init config files
+CLOUD_INIT_BOOTSTRAP_CONFIG_FILE = "/config/bootstrap-cloud-init.yaml"
+CLOUD_INIT_NETWORK_CONFIG_FILE = "/config/network-cloud-init.yaml"
 
 def handle_SIGCHLD(signal, frame):
     os.waitpid(-1, os.WNOHANG)
@@ -68,35 +72,94 @@ class Ubuntu_vm(vrnetlab.VM):
 
             self.add_disk(disk_size)
 
+    def _merge_cloud_init_config(self, dest, src):
+        """Cleanly merge two dictionaries, recursively"""
+        result = dest.copy()
+        # Update destination with source to avoid losing the default configuration
+        result.update(src)
+
+        # Merge all lists recursively, this cannot be done with the update() method
+        for key in src:
+            if key in dest:
+                if isinstance(dest[key], dict) and isinstance(src[key], dict):
+                    result[key] = self._merge_cloud_init_config(dest[key], src[key])
+                elif isinstance(dest[key], list) and isinstance(src[key], list):
+                    result[key] = dest[key] + src[key]
+        return result
+
     def create_boot_image(self):
         """Creates a cloud-init iso image with a bootstrap configuration"""
+        bootstrap_data = {
+            'hostname': self.hostname,
+            'fqdn': self.hostname,
+            'users': [
+                {
+                    'name': self.username,
+                    'sudo': 'ALL=(ALL) NOPASSWD: ALL',
+                    'groups': 'users, admin',
+                    'home': f'/usr/home/{self.username}',
+                    'shell': '/bin/bash',
+                    'plain_text_passwd': self.password,
+                    'lock_passwd': False
+                }
+            ],
+            'ssh_pwauth': True,
+            'disable_root': False,
+            'timezone': 'Europe/Berlin',
+            'runcmd': [
+                # Disable cloud-init for the subsequent boots
+                "touch /etc/cloud/cloud-init.disabled"
+            ]
+        }
+
+        network_data = {
+            'version': 2,
+            'ethernets': {
+                'enp1s0': {
+                    'addresses': ['10.0.0.15/24'],
+                    'gateway4': '10.0.0.2',
+                    'nameservers': {
+                        'addresses': ['9.9.9.9']
+                    }
+                }
+            }
+        }
+
+        # Merge custom user cloud-init config if the file exists
+        # Bootstrap part
+        if os.path.exists(CLOUD_INIT_BOOTSTRAP_CONFIG_FILE):
+            self.logger.debug(f"Found custom config at '{CLOUD_INIT_BOOTSTRAP_CONFIG_FILE}'")
+            try:
+                with open(CLOUD_INIT_BOOTSTRAP_CONFIG_FILE, 'r') as f:
+                    custom_data = yaml.safe_load(f)
+                    bootstrap_data = self._merge_cloud_init_config(bootstrap_data, custom_data)
+            except yaml.YAMLError as e:
+                self.logger.error(f"Could not parse custom cloud-init bootstrap config file: {e}")
+            except IOError as e:
+                self.logger.error(f"Could not read custom cloud-init bootstrap config file: {e}")
+        else:
+            self.logger.debug(f"No custom cloud-init bootstrap config file found at '{CLOUD_INIT_BOOTSTRAP_CONFIG_FILE}'. Using defaults.")
+
+        # Network part
+        if os.path.exists(CLOUD_INIT_NETWORK_CONFIG_FILE):
+            self.logger.debug(f"Found custom config at '{CLOUD_INIT_NETWORK_CONFIG_FILE}'")
+            try:
+                with open(CLOUD_INIT_NETWORK_CONFIG_FILE, 'r') as f:
+                    custom_data = yaml.safe_load(f)
+                    network_data = self._merge_cloud_init_config(network_data, custom_data)
+            except yaml.YAMLError as e:
+                self.logger.error(f"Could not parse custom cloud-init network config file: {e}")
+            except IOError as e:
+                self.logger.error(f"Could not read custom cloud-init network config file: {e}")
+        else:
+            self.logger.debug(f"No custom cloud-init network config file found at '{CLOUD_INIT_NETWORK_CONFIG_FILE}'. Using defaults.")
 
         with open("/bootstrap_config.yaml", "w") as cfg_file:
             cfg_file.write("#cloud-config\n")
-            cfg_file.write(f"hostname: {self.hostname}\n")
-            cfg_file.write(f"fqdn: {self.hostname}\n")
-            cfg_file.write("users:\n")
-            cfg_file.write(f"  - name: {self.username}\n")
-            cfg_file.write("    shell: /bin/bash\n")
-            cfg_file.write('    sudo: "ALL=(ALL) NOPASSWD: ALL"\n')
-            cfg_file.write("    groups: users, admin\n")
-            cfg_file.write(f"    plain_text_passwd: {self.password}\n")
-            cfg_file.write("    lock_passwd: false\n")
-            cfg_file.write("ssh_pwauth: true\n")
-            cfg_file.write("disable_root: false\n")
-            cfg_file.write("timezone: Europe/Berlin\n")
-            # Disable cloud-init for the subsequent boots
-            cfg_file.write("runcmd:\n")
-            cfg_file.write("  - touch /etc/cloud/cloud-init.disabled\n")
+            yaml.dump(bootstrap_data, cfg_file, default_flow_style=False)
 
         with open("/network_config.yaml", "w") as net_cfg_file:
-            net_cfg_file.write("version: 2\n")
-            net_cfg_file.write("ethernets:\n")
-            net_cfg_file.write("  enp1s0:\n")
-            net_cfg_file.write("    addresses: [10.0.0.15/24]\n")
-            net_cfg_file.write("    gateway4: 10.0.0.2\n")
-            net_cfg_file.write("    nameservers:\n")
-            net_cfg_file.write("        addresses: [ 9.9.9.9 ]\n")
+            yaml.dump(network_data, net_cfg_file, default_flow_style=False)
 
         cloud_localds_args = [
             "cloud-localds",

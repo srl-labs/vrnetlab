@@ -11,7 +11,10 @@ import sys
 import yaml
 import vrnetlab
 
-CLOUD_INIT_CONFIG_FILE = "/config/cloud-init.yaml"
+# Path to custom cloud-init config files
+CLOUD_INIT_BOOTSTRAP_CONFIG_FILE = "/config/bootstrap-cloud-init.yaml"
+CLOUD_INIT_NETWORK_CONFIG_FILE = "/config/network-cloud-init.yaml"
+
 BACKUP_FILE = "/config/backup.tar.gz"
 
 
@@ -118,18 +121,33 @@ class FreeBSD_vm(vrnetlab.VM):
         }
 
         # Merge custom user cloud-init config if the file exists
-        if os.path.exists(CLOUD_INIT_CONFIG_FILE):
-            self.logger.debug(f"Found custom config at '{CLOUD_INIT_CONFIG_FILE}'")
+        # Bootstrap part
+        if os.path.exists(CLOUD_INIT_BOOTSTRAP_CONFIG_FILE):
+            self.logger.debug(f"Found custom config at '{CLOUD_INIT_BOOTSTRAP_CONFIG_FILE}'")
             try:
-                with open(CLOUD_INIT_CONFIG_FILE, 'r') as f:
+                with open(CLOUD_INIT_BOOTSTRAP_CONFIG_FILE, 'r') as f:
                     custom_data = yaml.safe_load(f)
                     bootstrap_data = self._merge_cloud_init_config(bootstrap_data, custom_data)
             except yaml.YAMLError as e:
-                self.logger.error(f"Could not parse custom config file: {e}")
+                self.logger.error(f"Could not parse custom cloud-init bootstrap config file: {e}")
             except IOError as e:
-                self.logger.error(f"Could not read custom config file: {e}")
+                self.logger.error(f"Could not read custom cloud-init bootstrap config file: {e}")
         else:
-            self.logger.debug(f"No custom config file found at '{CLOUD_INIT_CONFIG_FILE}'. Using defaults.")
+            self.logger.debug(f"No custom cloud-init bootstrap config file found at '{CLOUD_INIT_BOOTSTRAP_CONFIG_FILE}'. Using defaults.")
+
+        # Network part
+        if os.path.exists(CLOUD_INIT_NETWORK_CONFIG_FILE):
+            self.logger.debug(f"Found custom config at '{CLOUD_INIT_NETWORK_CONFIG_FILE}'")
+            try:
+                with open(CLOUD_INIT_NETWORK_CONFIG_FILE, 'r') as f:
+                    custom_data = yaml.safe_load(f)
+                    network_data = self._merge_cloud_init_config(network_data, custom_data)
+            except yaml.YAMLError as e:
+                self.logger.error(f"Could not parse custom cloud-init network config file: {e}")
+            except IOError as e:
+                self.logger.error(f"Could not read custom cloud-init network config file: {e}")
+        else:
+            self.logger.debug(f"No custom cloud-init network config file found at '{CLOUD_INIT_NETWORK_CONFIG_FILE}'. Using defaults.")
 
         with open("/bootstrap_config.yaml", "w") as cfg_file:
             cfg_file.write("#cloud-config\n")
@@ -146,7 +164,8 @@ class FreeBSD_vm(vrnetlab.VM):
             "/bootstrap_config.yaml",
         ]
 
-        subprocess.Popen(cloud_localds_args)
+        process = subprocess.Popen(cloud_localds_args)
+        process.wait()
 
     def restore_backup(self):
         """Restore saved backup if there is one"""
