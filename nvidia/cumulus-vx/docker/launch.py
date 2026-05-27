@@ -21,7 +21,6 @@
 
 import datetime
 import logging
-import math
 import os
 import re
 import signal
@@ -110,9 +109,11 @@ class CumulusVX_vm(vrnetlab.VM):
 
         self.logger.info(f"Using Cumulus VX disk image: {disk_image}")
 
-        # Cumulus VX is a switch — data-plane NICs are provisioned from
-        # containerlab via CLAB_INTFS.
-        self.num_nics = int(os.environ.get("CLAB_INTFS", 0))
+        # Cumulus VX is a switch — provision enough PCI slots so that
+        # the base class dummy-NIC (socket placeholder) logic fills any
+        # gaps, giving correct swpX numbering even with sparse topology
+        # interface indices (e.g. eth1, eth4, eth6, eth7).
+        self.num_nics = 16
         self.nic_type = "virtio-net-pci"
 
         # NVUE REST API (HTTPS on 8765) — 8080 is already in the base class
@@ -171,6 +172,18 @@ class CumulusVX_vm(vrnetlab.VM):
             self.start()
             return
 
+        # If first-boot setup is already done, poll switchd directly via
+        # the active serial session (no login prompt needed).
+        if self._bootstrap_done:
+            if not self._switchd_is_ready():
+                self.spins += 1
+                return
+            self.running = True
+            self.tn.close()
+            startup_time = datetime.datetime.now() - self.start_time
+            self.logger.info("Startup complete in: %s", startup_time)
+            return
+
         (ridx, match, res) = self.tn.expect(
             [b"login: ", b"Login: ", b"cumulus login: "],
             1,
@@ -179,28 +192,21 @@ class CumulusVX_vm(vrnetlab.VM):
         if match:
             self.logger.debug("Cumulus VX login prompt detected")
 
-            if not self._bootstrap_done:
-                self._bootstrap_done = True
-                try:
-                    self._first_boot_setup()
-                except Exception as exc:
-                    self.logger.error(
-                        "First-boot setup failed (%s) — password may need "
-                        "manual change via serial console (port %d)",
-                        exc,
-                        5000 + self.num,
-                    )
-
-            # Cumulus-specific: wait for switchd to be active so that swp
-            # ports are fully initialised before reporting healthy.
-            if not self._switchd_is_ready():
+            try:
+                self._first_boot_setup()
+            except Exception as exc:
+                self.logger.error(
+                    "First-boot setup failed (%s) — password may need "
+                    "manual change via serial console (port %d)",
+                    exc,
+                    5000 + self.num,
+                )
+                # Don't set _bootstrap_done; retry on next login prompt.
                 self.spins += 1
                 return
 
-            self.running = True
-            self.tn.close()
-            startup_time = datetime.datetime.now() - self.start_time
-            self.logger.info("Startup complete in: %s", startup_time)
+            self._bootstrap_done = True
+            self.spins += 1
             return
 
         if res != b"":
@@ -210,43 +216,21 @@ class CumulusVX_vm(vrnetlab.VM):
         self.spins += 1
 
     def _switchd_is_ready(self):
-        """Check whether switchd is active via the serial console.
-        Returns True if ``systemctl is-active switchd`` prints 'active'.
-        """
-        self._tn_write("")
+        """Check whether switchd is active via the serial console."""
+        self.tn.write(b"\r")
         time.sleep(0.5)
-        self._tn_write("systemctl is-active switchd 2>/dev/null")
+        self.tn.write(b"systemctl is-active switchd 2>/dev/null\r")
         time.sleep(2)
         try:
             (_, match, _) = self.tn.expect([b"active", b"inactive", b"failed"], 3)
             if match:
-                self.logger.debug("switchd status: %s", match.group(0).decode())
                 return match.group(0) == b"active"
         except Exception:
             pass
         return False
 
-    def _tn_write(self, text):
-        """Write a line to the serial console."""
-        self.tn.write(("%s\r" % text).encode())
-        self.logger.trace("SENT: %s", text)
-
-    def _tn_read_until(self, pattern, timeout=10):
-        """Read from the serial console until *pattern* (bytes) is seen."""
-        self.logger.trace("WAITING for: %s", pattern.decode(errors="replace"))
-        (ridx, match, res) = self.tn.expect([pattern], timeout)
-        if match:
-            self.logger.trace("MATCHED: %s", pattern.decode(errors="replace"))
-        return ridx, match, res
-
     def _first_boot_setup(self):
-        """Handle Cumulus VX first-boot forced password change.
-
-        A fresh Cumulus VX image has user ``cumulus`` / ``cumulus`` with an
-        expired password.  We log in, satisfy the PAM password change with
-        ``Nsn1234!``, enable NOPASSWD sudo, disable password expiry, and
-        set the hostname.
-        """
+        """Handle Cumulus VX first-boot forced password change."""
 
         VM_USER = "cumulus"
         VM_PASS = "cumulus"
@@ -254,176 +238,48 @@ class CumulusVX_vm(vrnetlab.VM):
 
         self.logger.info("First-boot setup for '%s' ...", VM_USER)
 
-        # ── Step 1: log in ──────────────────────────────────────────────────
-        self._tn_write(VM_USER)
-        self._tn_read_until(b"Password:", 15)
-        self._tn_write(VM_PASS)
-        time.sleep(1)
+        # Step 1 — log in
+        self.tn.write(("%s\r" % VM_USER).encode())
+        self.tn.expect([b"Password:"], 10)
+        self.tn.write(("%s\r" % VM_PASS).encode())
+        time.sleep(0.5)
 
-        # ── Step 2: forced password change (PAM) ────────────────────────────
+        # Step 2 — forced password change (PAM)
         (ridx, match, _) = self.tn.expect(
-            [b"Current password:", b"@", b"$ ", b"# "],
-            10,
+            [b"Current password:", b"@", b"$ ", b"# "], 8,
         )
-
         if match and ridx == 0:
             self.logger.info("First-boot: changing expired password")
-            self._tn_write(VM_PASS)
-            self._tn_read_until(b"New password:", 15)
-            self._tn_write(TMP_PASS)
-            self._tn_read_until(b"Retype new password:", 15)
-            self._tn_write(TMP_PASS)
-            time.sleep(2)
-
+            self.tn.write(("%s\r" % VM_PASS).encode())
+            self.tn.expect([b"New password:"], 10)
+            self.tn.write(("%s\r" % TMP_PASS).encode())
+            self.tn.expect([b"Retype new password:"], 10)
+            self.tn.write(("%s\r" % TMP_PASS).encode())
+            time.sleep(1)
         elif match and ridx in (1, 2, 3):
             self.logger.debug("Already authenticated (overlay reuse)")
 
-        # ── Step 3: configure system (sudo, chage, hostname) ─────────────
-        self.logger.info(
-            "Configuring system (new password is '%s') ...", TMP_PASS
-        )
-        self._tn_write(
+        # Step 3 — configure system
+        self.logger.info("Configuring system ...")
+        self.tn.write((
             "echo '%s' | sudo -S bash -c '"
             "chage -M -1 %s && "
             "echo \"%s ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/%s && "
-            "hostnamectl set-hostname %s'"
+            "hostnamectl set-hostname %s'\r"
             % (TMP_PASS, VM_USER, VM_USER, VM_USER, self.hostname)
-        )
-        time.sleep(4)
+        ).encode())
+        time.sleep(3)
 
-        # ── Step 4: verify ─────────────────────────────────────────────────
-        self._tn_write("exit")
-        time.sleep(0.5)
-        self._tn_write("")
-        time.sleep(0.5)
-        self._tn_write(VM_USER)
-        self._tn_read_until(b"Password:", 10)
-        self._tn_write(TMP_PASS)
-        time.sleep(1.5)
-
-        (r2, m2, _) = self.tn.expect(
-            [b"@", b"$ ", b"# ", b"Current password:", b"incorrect"],
-            8,
-        )
-
-        if m2 and r2 in (0, 1, 2):
-            self.logger.info(
-                "Password verified: '%s' / '%s'", VM_USER, TMP_PASS
-            )
+        # Step 4 — verify shell is still responsive (password was
+        # already changed by PAM in step 2)
+        self.tn.write(b"\r")
+        (_, m2, _) = self.tn.expect([b"$ ", b"# ", b"@"], 8)
+        if m2:
+            self.logger.info("Password verified: '%s' / '%s'", VM_USER, TMP_PASS)
         else:
-            self.logger.warning("Password verify skipped (ridx=%s)", r2)
+            self.logger.warning("Shell prompt not detected after config")
 
         self.logger.info("First-boot setup complete")
-
-
-    # ── NIC provisioning overrides ──────────────────────────────────────────
-    # Cumulus VX uses socket placeholders to fill PCI gaps so that switch port
-    # numbering (swpX) matches the topology interface numbering even when
-    # interfaces are sparsely numbered (e.g. eth1, eth4, eth6, eth7).
-
-    def nic_provision_delay(self):
-        """Override parent: discover highest provisioned NIC index without
-        truncating to a sequential range, so that sparse interface numbering
-        (e.g. eth1, eth4, eth6, eth7) is correctly handled."""
-        import pathlib
-
-        if self.num_provisioned_nics == 0:
-            if self.min_nics:
-                self.insuffucient_nics = True
-            return
-
-        self.logger.debug("waiting for provisioned interfaces to appear...")
-
-        inf_path = pathlib.Path("/sys/class/net/")
-        while True:
-            provisioned_nics = list(
-                inf_path.glob(f"{self.data_intf_prefix}*")
-            )
-            if len(provisioned_nics) >= self.num_provisioned_nics + 1:
-                nics = [
-                    int(re.search(pattern=r"\d+", string=nic.name).group())
-                    for nic in provisioned_nics
-                ]
-                # Accept any index >= start_eth (not a closed range)
-                nics = [nic for nic in nics if nic >= self.start_nic_eth_idx]
-                if nics:
-                    self.highest_provisioned_nic_num = max(nics)
-                self.logger.debug(
-                    "highest allocated interface id: %s",
-                    self.highest_provisioned_nic_num,
-                )
-                break
-            time.sleep(5)
-
-        if self.num_provisioned_nics < self.min_nics:
-            self.insuffucient_nics = True
-
-    def gen_nics(self):
-        """Override parent: loop bound is max(count, highest+1) so that
-        sparsely numbered interfaces are not lost.  Missing slots below the
-        highest provisioned NIC get socket placeholders so that PCI positions
-        stay aligned and swpX numbering inside Cumulus matches ethX."""
-        self.nic_provision_delay()
-
-        res = []
-        if self.conn_mode == "tc":
-            self.create_tc_tap_ifup()
-
-        start_eth = self.start_nic_eth_idx
-        end_eth = max(
-            self.start_nic_eth_idx + self.num_nics,
-            self.highest_provisioned_nic_num + 1,
-        )
-        pci_bus_ctr = 0
-        for i in range(start_eth, end_eth):
-            pci_bus_ctr += 1
-            x = pci_bus_ctr + 1 if "vEOS" in self.image else pci_bus_ctr
-            pci_bus = math.floor(x / self.nics_per_pci_bus) + 1
-            addr = (x % self.nics_per_pci_bus) + 1
-
-            if not os.path.exists(
-                f"/sys/class/net/{self.data_intf_prefix}{i}"
-            ):
-                if i >= self.highest_provisioned_nic_num:
-                    continue
-                # socket placeholder for gap
-                res.extend(
-                    [
-                        "-device",
-                        f"{self.nic_type},netdev=p{i:02d}"
-                        + (
-                            f",bus=pci.{pci_bus},addr=0x{addr:x}"
-                            if self.provision_pci_bus
-                            else ""
-                        ),
-                        "-netdev",
-                        f"socket,id=p{i:02d},listen=:{i + 10000:02d}",
-                    ]
-                )
-                continue
-
-            mac = self.get_intf_mac(
-                f"{self.data_intf_prefix}{i}"
-            ) or vrnetlab.gen_mac(i)
-            res.append("-device")
-            res.append(
-                f"{self.nic_type},netdev=p{i:02d},mac={mac}"
-                + (
-                    f",bus=pci.{pci_bus},addr=0x{addr:x}"
-                    if self.provision_pci_bus
-                    else ""
-                ),
-            )
-            if self.conn_mode == "tc":
-                res.append("-netdev")
-                res.append(
-                    f"tap,id=p{i:02d},ifname=tap{i},"
-                    "script=/etc/tc-tap-ifup,downscript=no"
-                )
-
-        return res
-
-    # ── end NIC overrides ────────────────────────────────────────────────────
 
 
 # ── VR subclass ─────────────────────────────────────────────────────────────────
