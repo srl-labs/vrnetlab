@@ -2,7 +2,6 @@
 # ==============================================================================
 # launch.py — Nvidia Cumulus VX vrnetlab launcher
 #
-# Modelled after the Juniper Apstra and Nokia CmgLinux launcher patterns.
 #
 # Key design decisions for Cumulus VX
 # ───────────────────────────────────
@@ -29,8 +28,8 @@ import time
 
 import vrnetlab
 
-
 # ── signal handlers ────────────────────────────────────────────────────────────
+
 
 def handle_SIGCHLD(signal, frame):
     os.waitpid(-1, os.WNOHANG)
@@ -65,6 +64,7 @@ DEFAULT_RAM_MB = 4096
 
 
 # ── VM subclass ─────────────────────────────────────────────────────────────────
+
 
 class CumulusVX_vm(vrnetlab.VM):
     def __init__(self, hostname, username, password, conn_mode):
@@ -124,16 +124,20 @@ class CumulusVX_vm(vrnetlab.VM):
             persistent_overlay = "/config/cumulus_overlay.qcow2"
 
             if not os.path.exists(persistent_overlay):
-                vrnetlab.run_command([
-                    "qemu-img", "create",
-                    "-f", "qcow2",
-                    "-b", disk_image,
-                    "-F", "qcow2",
-                    persistent_overlay,
-                ])
-                self.logger.info(
-                    "Created persistent overlay at %s", persistent_overlay
+                vrnetlab.run_command(
+                    [
+                        "qemu-img",
+                        "create",
+                        "-f",
+                        "qcow2",
+                        "-b",
+                        disk_image,
+                        "-F",
+                        "qcow2",
+                        persistent_overlay,
+                    ]
                 )
+                self.logger.info("Created persistent overlay at %s", persistent_overlay)
             else:
                 self.logger.info(
                     "Reusing existing persistent overlay at %s",
@@ -234,7 +238,7 @@ class CumulusVX_vm(vrnetlab.VM):
 
         VM_USER = "cumulus"
         VM_PASS = "cumulus"
-        TMP_PASS = "Nsn1234!"
+        NEW_PASS = "Clab123!"
 
         self.logger.info("First-boot setup for '%s' ...", VM_USER)
 
@@ -246,28 +250,31 @@ class CumulusVX_vm(vrnetlab.VM):
 
         # Step 2 — forced password change (PAM)
         (ridx, match, _) = self.tn.expect(
-            [b"Current password:", b"@", b"$ ", b"# "], 8,
+            [b"Current password:", b"@", b"$ ", b"# "],
+            8,
         )
         if match and ridx == 0:
             self.logger.info("First-boot: changing expired password")
             self.tn.write(("%s\r" % VM_PASS).encode())
             self.tn.expect([b"New password:"], 10)
-            self.tn.write(("%s\r" % TMP_PASS).encode())
+            self.tn.write(("%s\r" % NEW_PASS).encode())
             self.tn.expect([b"Retype new password:"], 10)
-            self.tn.write(("%s\r" % TMP_PASS).encode())
+            self.tn.write(("%s\r" % NEW_PASS).encode())
             time.sleep(1)
         elif match and ridx in (1, 2, 3):
             self.logger.debug("Already authenticated (overlay reuse)")
 
         # Step 3 — configure system
         self.logger.info("Configuring system ...")
-        self.tn.write((
-            "echo '%s' | sudo -S bash -c '"
-            "chage -M -1 %s && "
-            "echo \"%s ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/%s && "
-            "hostnamectl set-hostname %s'\r"
-            % (TMP_PASS, VM_USER, VM_USER, VM_USER, self.hostname)
-        ).encode())
+        self.tn.write(
+            (
+                "echo '%s' | sudo -S bash -c '"
+                "chage -M -1 %s && "
+                'echo "%s ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/%s && '
+                "hostnamectl set-hostname %s'\r"
+                % (NEW_PASS, VM_USER, VM_USER, VM_USER, self.hostname)
+            ).encode()
+        )
         time.sleep(3)
 
         # Step 4 — verify shell is still responsive (password was
@@ -275,7 +282,7 @@ class CumulusVX_vm(vrnetlab.VM):
         self.tn.write(b"\r")
         (_, m2, _) = self.tn.expect([b"$ ", b"# ", b"@"], 8)
         if m2:
-            self.logger.info("Password verified: '%s' / '%s'", VM_USER, TMP_PASS)
+            self.logger.info("Password verified: '%s' / '%s'", VM_USER, NEW_PASS)
         else:
             self.logger.warning("Shell prompt not detected after config")
 
@@ -284,12 +291,11 @@ class CumulusVX_vm(vrnetlab.VM):
 
 # ── VR subclass ─────────────────────────────────────────────────────────────────
 
+
 class CumulusVX(vrnetlab.VR):
     def __init__(self, hostname, username, password, conn_mode):
         super(CumulusVX, self).__init__(username, password)
-        self.vms = [
-            CumulusVX_vm(hostname, username, password, conn_mode)
-        ]
+        self.vms = [CumulusVX_vm(hostname, username, password, conn_mode)]
 
 
 # ── entry point ─────────────────────────────────────────────────────────────────
@@ -297,9 +303,7 @@ class CumulusVX(vrnetlab.VR):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Nvidia Cumulus VX vrnetlab launcher"
-    )
+    parser = argparse.ArgumentParser(description="Nvidia Cumulus VX vrnetlab launcher")
     parser.add_argument(
         "--trace",
         action="store_true",
@@ -312,8 +316,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--password",
-        default="Nsn1234!",
-        help="Cumulus Linux admin password (default: Nsn1234!)",
+        default="Clab123!",
+        help="Cumulus Linux admin password",
     )
     parser.add_argument(
         "--hostname",
