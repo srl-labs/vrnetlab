@@ -221,9 +221,8 @@ class CumulusVX_vm(vrnetlab.VM):
 
     def _switchd_is_ready(self):
         """Check whether switchd is active via the serial console."""
-        self.tn.write(b"\r")
-        time.sleep(0.5)
-        self.tn.write(b"systemctl is-active switchd 2>/dev/null\r")
+        self.wait_write("\r", None)
+        self.wait_write("systemctl is-active switchd 2>/dev/null", None)
         time.sleep(2)
         try:
             (_, match, _) = self.tn.expect([b"active", b"inactive", b"failed"], 3)
@@ -243,10 +242,8 @@ class CumulusVX_vm(vrnetlab.VM):
         self.logger.info("First-boot setup for '%s' ...", VM_USER)
 
         # Step 1 — log in
-        self.tn.write(("%s\r" % VM_USER).encode())
-        self.tn.expect([b"Password:"], 10)
-        self.tn.write(("%s\r" % VM_PASS).encode())
-        time.sleep(0.5)
+        self.wait_write(VM_USER, None)
+        self.wait_write(VM_PASS, "Password:")
 
         # Step 2 — forced password change (PAM)
         (ridx, match, _) = self.tn.expect(
@@ -255,31 +252,28 @@ class CumulusVX_vm(vrnetlab.VM):
         )
         if match and ridx == 0:
             self.logger.info("First-boot: changing expired password")
-            self.tn.write(("%s\r" % VM_PASS).encode())
-            self.tn.expect([b"New password:"], 10)
-            self.tn.write(("%s\r" % NEW_PASS).encode())
-            self.tn.expect([b"Retype new password:"], 10)
-            self.tn.write(("%s\r" % NEW_PASS).encode())
+            self.wait_write(VM_PASS, None)
+            self.wait_write(NEW_PASS, "New password:")
+            self.wait_write(NEW_PASS, "Retype new password:")
             time.sleep(1)
         elif match and ridx in (1, 2, 3):
             self.logger.debug("Already authenticated (overlay reuse)")
 
         # Step 3 — configure system
         self.logger.info("Configuring system ...")
-        self.tn.write(
-            (
-                "echo '%s' | sudo -S bash -c '"
-                "chage -M -1 %s && "
-                'echo "%s ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/%s && '
-                "hostnamectl set-hostname %s'\r"
-                % (NEW_PASS, VM_USER, VM_USER, VM_USER, self.hostname)
-            ).encode()
+        self.wait_write(
+            "echo '%s' | sudo -S bash -c '"
+            "chage -M -1 %s && "
+            'echo "%s ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/%s && '
+            "hostnamectl set-hostname %s'"
+            % (NEW_PASS, VM_USER, VM_USER, VM_USER, self.hostname),
+            None,
         )
         time.sleep(3)
 
         # Step 4 — verify shell is still responsive (password was
         # already changed by PAM in step 2)
-        self.tn.write(b"\r")
+        self.wait_write("\r", None)
         (_, m2, _) = self.tn.expect([b"$ ", b"# ", b"@"], 8)
         if m2:
             self.logger.info("Password verified: '%s' / '%s'", VM_USER, NEW_PASS)
