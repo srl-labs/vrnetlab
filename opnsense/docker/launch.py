@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import datetime
+import ipaddress
 import logging
 import os
 import re
@@ -47,9 +48,19 @@ class OPNsense_vm(vrnetlab.VM):
     The stock nano image puts a static 192.168.1.1 on the LAN and ships with
     SSH disabled, so it is unreachable over vrnetlab's management plane out of
     the box. On the first boot launch.py logs in over the serial console,
-    switches the LAN interface (vtnet0) to DHCP so it picks up vrnetlab's
-    management address (10.0.0.15), enables sshd with root login + password
-    auth, and reboots once to apply.
+    configures the LAN interface (vtnet0) as the management interface, enables
+    sshd with root login + password auth, and reboots once to apply.
+
+    The LAN is configured according to vrnetlab's management datapath mode:
+
+      * **host-forwarded** (default): the LAN is set to DHCP and picks up the
+        address qemu's user-mode networking hands out (10.0.0.15);
+      * **transparent / passthrough** (``CLAB_MGMT_PASSTHROUGH=true``): the LAN
+        is given the static address containerlab assigned to the container's
+        eth0 (``self.mgmt_address_ipv4``) plus a default gateway
+        (``self.mgmt_gw_ipv4``), so the node shows its real management IP. If
+        passthrough is combined with ``CLAB_MGMT_DHCP=true`` the LAN is left on
+        DHCP for an external server to address.
 
     The appliance is rebooted once to apply, so we expect two login prompts:
     configure on the first, declare the node ready on the second.
@@ -142,15 +153,13 @@ class OPNsense_vm(vrnetlab.VM):
         # root's login shell is the OPNsense console menu; option 8 = Shell
         self.wait_write("8", wait=MENU_PROMPT)
 
-        # LAN (vtnet0) -> DHCP, so it picks up the vrnetlab mgmt address
-        self.wait_write(
-            "sed -i '' -e 's|<ipaddr>192.168.1.1</ipaddr>|<ipaddr>dhcp</ipaddr>|' /conf/config.xml",
-            wait=SHELL_PROMPT,
-        )
-        self.wait_write(
-            "sed -i '' -e 's|<subnet>24</subnet>|<subnet></subnet>|' /conf/config.xml",
-            wait=SHELL_PROMPT,
-        )
+        # configure the LAN (vtnet0) management interface for the active
+        # management datapath mode
+        if self.mgmt_passthrough and not self.mgmt_dhcp:
+            self.configure_mgmt_static()
+        else:
+            self.configure_mgmt_dhcp()
+
         # enable sshd with root login + password auth
         self.wait_write(
             "sed -i '' -e 's|<group>admins</group>|<group>admins</group>"
@@ -161,6 +170,72 @@ class OPNsense_vm(vrnetlab.VM):
 
         # reboot to apply; bootstrap_spin will catch the next login prompt
         self.wait_write("reboot", wait=SHELL_PROMPT)
+
+    def configure_mgmt_dhcp(self):
+        """Set the LAN (vtnet0) to DHCP.
+
+        Used for the default host-forwarded datapath (qemu user-mode networking
+        hands out 10.0.0.15) and for passthrough + CLAB_MGMT_DHCP, where an
+        external DHCP server addresses the management interface.
+        """
+        self.logger.info("configuring LAN (vtnet0) for DHCP")
+        self.wait_write(
+            "sed -i '' -e 's|<ipaddr>192.168.1.1</ipaddr>|<ipaddr>dhcp</ipaddr>|' /conf/config.xml",
+            wait=SHELL_PROMPT,
+        )
+        self.wait_write(
+            "sed -i '' -e 's|<subnet>24</subnet>|<subnet></subnet>|' /conf/config.xml",
+            wait=SHELL_PROMPT,
+        )
+
+    def configure_mgmt_static(self):
+        """Give the LAN (vtnet0) the management IP containerlab assigned.
+
+        In transparent management mode the mgmt interface mirrors the
+        container's eth0, so the guest must carry that exact address plus a
+        default gateway to be reachable beyond its own subnet.
+
+        We edit /conf/config.xml with sed, like the other edits here: each
+        command is short enough to pass cleanly over the serial console (a
+        single long one-liner can exceed the console's line limit and hang).
+        The IP/subnet are simple field swaps; the default gateway is a small
+        <gateways> object inserted ahead of the existing <staticroutes>
+        element, with the LAN pointed at it.
+        """
+        addr = ipaddress.ip_interface(self.mgmt_address_ipv4)
+        ip = str(addr.ip)
+        prefix = str(addr.network.prefixlen)
+        gw = self.mgmt_gw_ipv4
+        self.logger.info(
+            "configuring LAN (vtnet0) with static mgmt address %s/%s gw %s",
+            ip,
+            prefix,
+            gw,
+        )
+
+        self.wait_write(
+            "sed -i '' -e 's|<ipaddr>192.168.1.1</ipaddr>|<ipaddr>%s</ipaddr>|' /conf/config.xml"
+            % ip,
+            wait=SHELL_PROMPT,
+        )
+        self.wait_write(
+            "sed -i '' -e 's|<subnet>24</subnet>|<subnet>%s</subnet>|' /conf/config.xml"
+            % prefix,
+            wait=SHELL_PROMPT,
+        )
+        # point the LAN at a named gateway ...
+        self.wait_write(
+            "sed -i '' -e 's|<if>vtnet0</if>|<if>vtnet0</if><gateway>MGMTGW</gateway>|' /conf/config.xml",
+            wait=SHELL_PROMPT,
+        )
+        # ... and define that gateway as the system default route
+        self.wait_write(
+            "sed -i '' -e 's#<staticroutes #<gateways><gateway_item>"
+            "<interface>lan</interface><gateway>%s</gateway><name>MGMTGW</name>"
+            "<weight>1</weight><ipprotocol>inet</ipprotocol><defaultgw>1</defaultgw>"
+            "</gateway_item></gateways><staticroutes #' /conf/config.xml" % gw,
+            wait=SHELL_PROMPT,
+        )
 
 
 class OPNsense(vrnetlab.VR):

@@ -26,9 +26,20 @@ Tested with `OPNsense-26.1.6-nano-amd64.img`.
 
 The image is used unmodified — no manual preparation is required. The stock nano
 image puts a static `192.168.1.1` on the LAN and ships with SSH disabled, so on
-the first boot `launch.py` logs in over the console, switches the LAN interface
-(`vtnet0`) to DHCP — so it picks up vrnetlab's management address `10.0.0.15` —
-enables sshd (root login + password auth), and reboots once to apply.
+the first boot `launch.py` logs in over the console, configures the LAN interface
+(`vtnet0`) as the management interface, enables sshd (root login + password
+auth), and reboots once to apply.
+
+### Management modes
+
+The LAN is configured to match vrnetlab's management datapath:
+
+* **host-forwarded** (default): `vtnet0` is set to DHCP and picks up the
+  address qemu's user-mode networking hands out (`10.0.0.15`).
+* **transparent / passthrough** (`CLAB_MGMT_PASSTHROUGH=true`): `vtnet0` is
+  given the static address containerlab assigned to the container's `eth0`,
+  plus a default gateway, so the node shows its real management IP. Combine
+  with `CLAB_MGMT_DHCP=true` to leave the LAN on DHCP for an external server.
 
 ## Usage
 
