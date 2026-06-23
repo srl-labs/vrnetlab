@@ -147,6 +147,7 @@ Since the changes we made in this fork are VM specific, we added a few popular
 routing products:
 
 * Arista vEOS
+* Cisco XRd vRouter
 * Cisco XRv9k
 * Cisco XRv
 * Cisco FTDv
