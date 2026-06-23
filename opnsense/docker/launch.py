@@ -27,21 +27,33 @@ logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
 
 
 def trace(self, message, *args, **kws):
+    # Yes, logger takes its '*args' as 'args'.
     if self.isEnabledFor(TRACE_LEVEL_NUM):
         self._log(TRACE_LEVEL_NUM, message, args, **kws)
 
 
 logging.Logger.trace = trace
 
+# console markers
+PASSWORD_PROMPT = "Password:"
+MENU_PROMPT = "Enter an option:"
+SHELL_PROMPT = "root@OPNsense:~ #"  # OPNsense root login shell (console menu -> 8)
+
 
 class OPNsense_vm(vrnetlab.VM):
-    """OPNsense firewall VM.
+    """OPNsense firewall/router VM (FreeBSD based).
 
-    Built from the pre-installed OPNsense *nano* serial image (FreeBSD based).
-    The base qcow2 has been pre-configured so the first NIC (vtnet0) is the
-    OPNsense LAN/management interface running DHCP -- it picks up vrnetlab's
-    management address (10.0.0.15) automatically -- and sshd is enabled with
-    root login + password auth. Default credentials are root / opnsense.
+    Built from the pre-installed OPNsense *nano* serial image, used unmodified.
+    The stock nano image puts a static 192.168.1.1 on the LAN and ships with
+    SSH disabled, so it is unreachable over vrnetlab's management plane out of
+    the box. On the first boot launch.py logs in over the serial console,
+    switches the LAN interface (vtnet0) to DHCP so it picks up vrnetlab's
+    management address (10.0.0.15), enables sshd with root login + password
+    auth, and reboots once to apply.
+
+    The appliance is rebooted once to apply, so we expect two login prompts:
+    configure on the first, declare the node ready on the second.
+    Default credentials: root / opnsense.
     """
 
     def __init__(self, hostname, username, password, nics, conn_mode):
@@ -60,13 +72,17 @@ class OPNsense_vm(vrnetlab.VM):
         self.conn_mode = conn_mode
         self.nic_type = "virtio-net-pci"
 
+        # one-time console config is applied on the first boot and the VM is
+        # rebooted once to apply it; we expect two login prompts.
+        self.configured = False
+
     def gen_mgmt(self):
         """Augment the parent to keep the mgmt interface on the first bus.
 
-        Like other FreeBSD-based guests, OPNsense enumerates virtio NICs in PCI
+        Like the freebsd/openbsd guests, OPNsense enumerates virtio NICs in PCI
         bus order. The parent places the mgmt NIC on a separate bus, which would
-        make the OS assign it the *last* index instead of vtnet0. Force it onto
-        pci.1 so it becomes vtnet0 (the baked-in LAN/management interface).
+        make the OS assign it the last index instead of vtnet0. Force it onto
+        pci.1 so it becomes vtnet0 -- the LAN/management interface.
         """
         res = super(OPNsense_vm, self).gen_mgmt()
         if "bus=pci.1" not in res[-3]:
@@ -74,9 +90,14 @@ class OPNsense_vm(vrnetlab.VM):
         return res
 
     def bootstrap_spin(self):
-        """Called periodically; mark the node running once it reaches login."""
+        """Called periodically; stay quiet until the login prompt.
+
+        Pressing a key earlier drops OPNsense into the interactive
+        interface-assignment wizard; left alone it auto-proceeds with the
+        image's vtnet0=LAN / vtnet1=WAN assignment.
+        """
         if self.spins > 600:
-            # too many spins with no result -> give up, restart the VM
+            # too many spins with no result -> give up, restart
             self.stop()
             self.start()
             return
@@ -84,7 +105,13 @@ class OPNsense_vm(vrnetlab.VM):
         (ridx, match, res) = self.tn.expect([b"login:"], 1)
         if match:
             if ridx == 0:
-                self.logger.info("OPNsense reached login prompt")
+                if not self.configured:
+                    self.logger.debug("login prompt -- applying configuration")
+                    self.bootstrap_config()
+                    self.configured = True
+                    self.spins = 0
+                    return
+                self.logger.debug("login prompt -- configuration applied")
                 self.running = True
                 self.tn.close()
                 startup_time = datetime.datetime.now() - self.start_time
@@ -97,6 +124,43 @@ class OPNsense_vm(vrnetlab.VM):
 
         self.spins += 1
         return
+
+    def bootstrap_config(self):
+        """Log in over the console, edit /conf/config.xml and reboot.
+
+        OPNsense applies /conf/config.xml on boot, so the changes are made on
+        the first boot and a reboot brings the appliance up fully configured.
+        bootstrap_spin catches the post-reboot login prompt and declares the
+        node ready.
+        """
+        self.logger.info("applying bootstrap configuration over the console")
+
+        # log in (the login prompt was already consumed by bootstrap_spin)
+        self.wait_write("root", wait=None)
+        self.wait_write("opnsense", wait=PASSWORD_PROMPT)
+
+        # root's login shell is the OPNsense console menu; option 8 = Shell
+        self.wait_write("8", wait=MENU_PROMPT)
+
+        # LAN (vtnet0) -> DHCP, so it picks up the vrnetlab mgmt address
+        self.wait_write(
+            "sed -i '' -e 's|<ipaddr>192.168.1.1</ipaddr>|<ipaddr>dhcp</ipaddr>|' /conf/config.xml",
+            wait=SHELL_PROMPT,
+        )
+        self.wait_write(
+            "sed -i '' -e 's|<subnet>24</subnet>|<subnet></subnet>|' /conf/config.xml",
+            wait=SHELL_PROMPT,
+        )
+        # enable sshd with root login + password auth
+        self.wait_write(
+            "sed -i '' -e 's|<group>admins</group>|<group>admins</group>"
+            "<enabled>enabled</enabled><permitrootlogin>1</permitrootlogin>"
+            "<passwordauth>1</passwordauth>|' /conf/config.xml",
+            wait=SHELL_PROMPT,
+        )
+
+        # reboot to apply; bootstrap_spin will catch the next login prompt
+        self.wait_write("reboot", wait=SHELL_PROMPT)
 
 
 class OPNsense(vrnetlab.VR):
@@ -115,7 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("--username", default="root", help="Username")
     parser.add_argument("--password", default="opnsense", help="Password")
     parser.add_argument("--hostname", default="opnsense", help="VM Hostname")
-    parser.add_argument("--nics", type=int, default=8, help="Number of NICs")
+    parser.add_argument("--nics", type=int, default=16, help="Number of NICS")
     parser.add_argument(
         "--connection-mode",
         default="tc",

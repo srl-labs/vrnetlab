@@ -19,41 +19,27 @@ needs (no install step).
        OPNsense-26.1.6-nano-amd64.img OPNsense-26.1.6.qcow2
    ```
 
-3. **Pre-configure the base image once** (see *Image preparation* below). This
-   bakes management networking + SSH into `/conf/config.xml`.
-4. Run `make`. It builds `vrnetlab/opnsense_opnsense:<version>` and also tags it
+3. Run `make`. It builds `vrnetlab/opnsense_opnsense:<version>` and also tags it
    as `vrnetlab/opnsense:<version>`.
 
 Tested with `OPNsense-26.1.6-nano-amd64.img`.
 
-## Image preparation (one-time, baked into the qcow2)
-
-The stock nano image puts a static `192.168.1.1` on the LAN and ships with SSH
-disabled, so it is unreachable through vrnetlab's management plane. Boot the
-qcow2 once and apply two changes to `/conf/config.xml`:
-
-* set the **LAN interface (vtnet0) to DHCP** so it picks up vrnetlab's
-  management address (`10.0.0.15`);
-* **enable sshd** with root login and password auth.
-
-```sh
-# in the OPNsense shell (console menu -> 8):
-sed -i '' -e 's|<ipaddr>192.168.1.1</ipaddr>|<ipaddr>dhcp</ipaddr>|' /conf/config.xml
-sed -i '' -e 's|<subnet>24</subnet>|<subnet></subnet>|' /conf/config.xml
-sed -i '' -e 's|<group>admins</group>|<group>admins</group><enabled>enabled</enabled><permitrootlogin>1</permitrootlogin><passwordauth>1</passwordauth>|' /conf/config.xml
-reboot
-```
-
-On first boot OPNsense runs the interface-assignment wizard once
-(WAN -> vtnet1, LAN -> vtnet0); answer it before applying the edits so the
-assignment is persisted too.
+The image is used unmodified — no manual preparation is required. The stock nano
+image puts a static `192.168.1.1` on the LAN and ships with SSH disabled, so on
+the first boot `launch.py` logs in over the console, switches the LAN interface
+(`vtnet0`) to DHCP — so it picks up vrnetlab's management address `10.0.0.15` —
+enables sshd (root login + password auth), and reboots once to apply.
 
 ## Usage
 
 The first interface (`vtnet0`) is the LAN/management interface; data interfaces
 start at `vtnet1` (WAN), `vtnet2` (OPT1), ...
 
-Default credentials: **root / opnsense**. The web GUI is on HTTPS (port 443).
+Default credentials: **root / opnsense** (fixed by the appliance image). The web
+GUI is on HTTPS (port 443).
+
+First boot takes a little longer than other images because of the configure +
+reboot cycle (~90s).
 
 ### With containerlab
 
