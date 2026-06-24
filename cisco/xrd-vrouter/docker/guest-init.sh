@@ -3,10 +3,10 @@
 #
 #   1. Read per-node config from the config CD the launcher attaches (/dev/sr0):
 #      nodename + first-boot.cfg (XR config: clab user, ssh/grpc/netconf + user cfg).
-#   2. Discover the virtio mgmt NIC and the emulated igb data NICs.
+#   2. Discover the virtio mgmt NIC and the emulated data NICs (igb or vmxnet3).
 #   3. Run the XRd vRouter container with host networking so XR shares the VM
 #      mgmt NIC (XR owns the management address explicitly via first-boot.cfg),
-#      and map each igb data NIC to Gi0/0/0/N.
+#      and map each data NIC to an XR data interface (Gi.. for igb, Te.. for vmxnet3).
 #   4. When XR is up and MgmtEth is up, print the readiness marker on the console
 #      so the vrnetlab launcher (watching the serial) marks the node up.
 set -euo pipefail
@@ -36,7 +36,12 @@ fi
 echo "node=$NODENAME image=$IMG"
 
 # ---------------------------------------------------------------------------
-# 2. Discover NICs. Mgmt = virtio_net; data = igb (8086:10c9), PCI-sorted.
+# 2. Discover NICs. Mgmt = the virtio_net interface (on bus 0000:00). Data NICs
+#    are whatever the launcher placed on the PCIe root ports (bus != 00) -- igb
+#    or vmxnet3 depending on XRD_NIC_TYPE. We match by PCI topology (Ethernet-
+#    controller class, not on bus 00) rather than a fixed device ID, so one path serves both
+#    NIC models, and via lspci so it works before any kernel driver binds them
+#    (XR binds them to vfio-pci anyway).
 # ---------------------------------------------------------------------------
 MGMT_IF=""
 for n in /sys/class/net/*; do
@@ -47,12 +52,13 @@ for n in /sys/class/net/*; do
 done
 echo "mgmt interface: ${MGMT_IF:-NONE}"
 
-mapfile -t PCIS < <(lspci -Dn | awk '$3 ~ /8086:10c9/ {print $1}' | sort)
-echo "igb data NIC(s): ${PCIS[*]:-none}"
+mapfile -t PCIS < <(lspci -Dn | awk '$2 ~ /^0200/ && $1 !~ /^0000:00:/ {print $1}' | sort)
+echo "data NIC(s): ${PCIS[*]:-none}"
 
 # NB: xr_name is NOT valid for pci interfaces on vRouter; XR numbers them
-# Gi0/0/0/0,1,... in the order listed here. We list in PCI order, which matches
-# the eth1,eth2,... order (each ethN -> rpN -> ascending PCI address).
+# Te0/0/0/0,1,... (vmxnet3, the default) or Gi0/0/0/0,1,... (igb) in the order
+# listed here. We list in PCI order, which matches the eth1,eth2,... order
+# (each ethN -> rpN -> ascending PCI address).
 XR_IFS=""
 for d in "${PCIS[@]}"; do
     short=${d#0000:}

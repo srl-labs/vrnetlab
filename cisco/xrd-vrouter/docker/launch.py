@@ -3,16 +3,16 @@
 
 XRd vRouter is distributed as a *container* whose dataplane needs PCI NICs, so it
 cannot run directly as a vrnetlab VM. This launcher boots a thin micro-VM (the
-"golden" qcow2) that provides q35 + Intel vIOMMU and emulated igb NICs; inside,
-guest-init runs the XRd vRouter container and binds those NICs to vfio-pci for
-its DPDK dataplane.
+"golden" qcow2) that provides q35 + Intel vIOMMU and emulated data NICs (vmxnet3
+by default, or igb); inside, guest-init runs the XRd vRouter container and binds
+those NICs to vfio-pci for its DPDK dataplane.
 
 By subclassing vrnetlab.VM we inherit the full containerlab-native machinery:
 tc-mirred datapath stitching, management port-forwarding (SSH/NETCONF/gNMI/SNMP),
 credentials, interface aliasing and health. We only override the bits that differ
 for the nested model:
-  * gen_nics(): emulated igb on per-NIC PCIe root ports (isolated IOMMU groups),
-    reusing the framework's tc taps.
+  * gen_nics(): emulated data NICs (vmxnet3 or igb) on per-NIC PCIe root ports
+    (isolated IOMMU groups), reusing the framework's tc taps.
   * machine: q35 + intel-iommu (+ virtio-balloon for RAM reclaim).
   * a config CD delivering XR first-boot config + node params to guest-init.
   * bootstrap: wait for guest-init's readiness marker on the VM console.
@@ -54,7 +54,7 @@ class XRd_vRouter_vm(vrnetlab.VM):
         if disk_image is None:
             raise FileNotFoundError("no golden .qcow2 found in /")
 
-        # vRouter needs >=2 dedicated CPUs (dataplane) + control plane; floor at 4.
+        # vRouter needs >=4 cores (dataplane + control plane); floor at 4.
         vcpu = max(int(vcpu), 4)
         # Needs ~5GiB RAM + 3GiB hugepages inside the VM; default 10GiB, hard floor 8GiB.
         ram = max(int(ram), 8192)
@@ -75,6 +75,16 @@ class XRd_vRouter_vm(vrnetlab.VM):
         self.nic_type = "virtio-net-pci"   # management NIC type
         self.provision_pci_bus = False     # we place data NICs on our own root ports
 
+        # Dataplane NIC model. vmxnet3 (default) is paravirtual, ~1.5× faster
+        # than igb for bulk forwarding, and XRd models it as TenGigE (10G). igb
+        # (GigabitEthernet, 1G) stays available via XRD_NIC_TYPE. Both device IDs
+        # are on XRd vRouter's supported-PCI allowlist.
+        self.data_nic = os.getenv("XRD_NIC_TYPE", "vmxnet3").strip().lower()
+        if self.data_nic not in ("vmxnet3", "igb"):
+            raise ValueError(
+                f"XRD_NIC_TYPE must be 'vmxnet3' or 'igb', got {self.data_nic!r}"
+            )
+
         # Passthrough management: the framework tc-mirreds the container's eth0
         # (the clab node IP) to the VM mgmt NIC, so XR's MgmtEth carries the real
         # clab management IP over a transparent L2 bridge. Passthrough rather than
@@ -85,7 +95,7 @@ class XRd_vRouter_vm(vrnetlab.VM):
         self.mgmt_gw_ipv4, self.mgmt_gw_ipv6 = self.get_mgmt_gw()
 
         # Switch machine to q35 + split irqchip and add an Intel vIOMMU so the
-        # guest can bind the igb NICs to vfio-pci; add a balloon for RAM reclaim.
+        # guest can bind the data NICs to vfio-pci; add a balloon for RAM reclaim.
         self._patch_machine_and_iommu()
 
         # Build the config CD (node name + XR first-boot config) and attach it.
@@ -171,8 +181,9 @@ grpc
 
     # ------------------------------------------------------------- overrides
     def gen_nics(self):
-        """Emulated igb data NICs, each on its own PCIe root port (own IOMMU
-        group), wired to the framework's tc taps (tapN <-> ethN)."""
+        """Emulated data NICs (vmxnet3 or igb, per XRD_NIC_TYPE), each on its own
+        PCIe root port (own IOMMU group), wired to the framework's tc taps
+        (tapN <-> ethN)."""
         if self.conn_mode == "tc":
             self.create_tc_tap_ifup()
         # wait for containerlab to provision the data interfaces
@@ -186,7 +197,7 @@ grpc
             netdev = f"p{i:02d}"
             res.extend([
                 "-device", f"pcie-root-port,id=rp{i},bus=pcie.0,chassis={chassis},slot={chassis}",
-                "-device", f"igb,netdev={netdev},mac={mac},bus=rp{i}",
+                "-device", f"{self.data_nic},netdev={netdev},mac={mac},bus=rp{i}",
             ])
             if self.conn_mode == "tc":
                 res.extend([
@@ -197,7 +208,7 @@ grpc
                 res.extend(["-netdev", f"socket,id={netdev},listen=:{i + 10000:02d}"])
             i += 1
             chassis += 1
-        self.logger.info(f"generated {chassis - 1} igb data NIC(s)")
+        self.logger.info(f"generated {chassis - 1} {self.data_nic} data NIC(s)")
         return res
 
     def bootstrap_spin(self):
