@@ -1282,6 +1282,23 @@ class VM:
         return str(self._smp)
 
     @property
+    def nic_type(self):
+        """
+        Read NIC type from the QEMU_NIC_TYPE environment variable.
+        If the QEMU_NIC_TYPE parameter is not set, the default value is used.
+        Should be provided as a QEMU device model, e.g. virtio-net-pci.
+        """
+
+        if "QEMU_NIC_TYPE" in os.environ:
+            return str(os.getenv("QEMU_NIC_TYPE"))
+
+        return str(self._nic_type)
+
+    @nic_type.setter
+    def nic_type(self, value):
+        self._nic_type = value
+
+    @property
     def qemu_additional_args(self):
         """
         Read additional qemu arguments (e.g. number of CPU cores) from the QEMU_ADDITIONAL_ARGS environment variable.
