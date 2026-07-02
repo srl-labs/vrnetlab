@@ -164,8 +164,15 @@ class VQFX_vcp(vrnetlab.VM):
             self.logger.trace("Config File %s exists" % STARTUP_CONFIG_FILE)
             with open(STARTUP_CONFIG_FILE) as file:
                 self.logger.trace("Opening Config File %s" % STARTUP_CONFIG_FILE)
-                config_lines = file.readlines()
-                config_lines = [line.rstrip() for line in config_lines]
+                # bootstrap_config() (run just before this) commits em0 to a
+                # fixed 10.0.0.15/24 that the qemu hostfwd targets. Strip any em0
+                # address from the startup config so em0 keeps only that address;
+                # Junos keeps multiple addresses per interface, so an appended
+                # one would be added alongside 10.0.0.15, leaving a stale/foreign
+                # address on the management interface. Keyed on the interface
+                # name so it catches whatever address the config sets there.
+                startup_cfg = vrnetlab.strip_mgmt_interface_config(file.read(), "em0", "junos")
+                config_lines = startup_cfg.splitlines()
                 self.logger.trace("Parsed Config File %s" % STARTUP_CONFIG_FILE)
 
             self.logger.info("Writing lines from %s" % STARTUP_CONFIG_FILE)
