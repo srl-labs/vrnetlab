@@ -99,6 +99,12 @@ write_files:
       set -euo pipefail
       curl -fsSL https://get.docker.com | sh
       systemctl restart docker
+      # qemu-guest-agent: lets the host drive guest-exec over the virtio-serial
+      # channel org.qemu.guest_agent.0 the launcher now attaches -- out-of-band
+      # access into the guest even when management is down and no serial getty.
+      apt-get update
+      apt-get install -y --no-install-recommends qemu-guest-agent
+      systemctl enable qemu-guest-agent
       mount -t 9p -o trans=virtio,version=9p2000.L,ro xrdshare /mnt
       docker load -i /mnt/xrd.tar
       umount /mnt
