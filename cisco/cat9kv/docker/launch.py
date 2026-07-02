@@ -143,7 +143,16 @@ ip ssh server algorithm mac hmac-sha2-512
         if os.path.exists(STARTUP_CONFIG_FILE):
             self.logger.info("Startup configuration file found")
             with open(STARTUP_CONFIG_FILE, "r") as startup_config:
-                cat9kv_config += startup_config.read()
+                # Strip any address the appended startup-config sets on the mgmt
+                # interface so a stale saved/hand-written mgmt address can never
+                # re-set it after the GigabitEthernet0/0 stanza configured above
+                # (IOS-XE applies day0 config top to bottom, so a later "ip
+                # address"/"ipv6 address" under the same interface wins) --
+                # otherwise the switch comes up "healthy" but unreachable at the
+                # address clab/DNS expect. Keyed on interface name, not value.
+                cat9kv_config += vrnetlab.strip_mgmt_interface_config(
+                    startup_config.read(), "GigabitEthernet0/0", "ios"
+                )
         else:
             self.logger.warning(f"User provided startup configuration is not found.")
 

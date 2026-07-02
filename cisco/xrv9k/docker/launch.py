@@ -293,7 +293,16 @@ root
         if os.path.exists(STARTUP_CONFIG_FILE):
             self.logger.info("Startup configuration file found")
             with open(STARTUP_CONFIG_FILE, "r") as config:
-                xrv9k_config += config.read()
+                # Strip any address the appended startup-config sets on the mgmt
+                # interface so a stale saved/hand-written mgmt address can never
+                # win over the interface MgmtEth stanza configured above
+                # (last-applied wins under IOS-XR) -- otherwise XR comes up
+                # "healthy" but unreachable at the address clab/DNS expect.
+                # Keyed on interface name, not address value (the stale value
+                # differs from the current one, so only the name is invariant).
+                xrv9k_config += vrnetlab.strip_mgmt_interface_config(
+                    config.read(), "MgmtEth0/RP0/CPU0/0", "ios"
+                )
         else:
             self.logger.warning("User provided startup configuration is not found.")
 

@@ -114,9 +114,23 @@ class VJUNOSSWITCH_vm(vrnetlab.VM):
             self.logger.trace(
                 f"Startup config file {STARTUP_CONFIG_FILE} found, appending initial configuration"
             )
-            # append startup cfg to inital configuration
-            append_cfg = f"cat init.conf {STARTUP_CONFIG_FILE} >> juniper.conf"
-            subprocess.run(append_cfg, shell=True)
+            # Append startup cfg to initial configuration. Strip any address
+            # the appended startup config sets on the mgmt interface so fxp0
+            # carries only the launcher's own address (rendered into init.conf
+            # above). Junos keeps multiple addresses per interface, so an
+            # appended one is added alongside the launcher's rather than
+            # replacing it, leaving a stale/foreign address on the management
+            # interface. Keyed on the interface name, not the address value (the
+            # stale value differs from the current one).
+            with open("init.conf", "r") as f:
+                base_cfg = f.read()
+            with open(STARTUP_CONFIG_FILE, "r") as f:
+                startup_cfg = vrnetlab.strip_mgmt_interface_config(
+                    f.read(), "fxp0", "junos"
+                )
+            with open("juniper.conf", "w") as f:
+                f.write(base_cfg)
+                f.write(startup_cfg)
 
         # generate mountable config disk based on juniper.conf file with base vrnetlab configs
         subprocess.run(["./make-config.sh", "juniper.conf", "config.img"], check=True)

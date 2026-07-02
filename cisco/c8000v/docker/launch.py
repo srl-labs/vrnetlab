@@ -87,8 +87,17 @@ class C8000v_vm(vrnetlab.VM):
                     self.logger.info("MIME-wrapped config detected, using as-is")
                     cfg = startup_cfg
                 else:
-                    # Otherwise, append to bootstrap config
-                    cfg = self.gen_bootstrap_config() + startup_cfg
+                    # Otherwise, append to bootstrap config. Strip any address
+                    # the appended config sets on the mgmt interface so a stale
+                    # saved/hand-written mgmt address can never re-set it after
+                    # the bootstrap GigabitEthernet1 stanza (IOS-XE applies day0
+                    # config top to bottom, so a later "ip address" under the
+                    # same interface wins) -- otherwise the router comes up
+                    # "healthy" but unreachable at the address clab/DNS expect.
+                    # Keyed on interface name, not address value.
+                    cfg = self.gen_bootstrap_config() + vrnetlab.strip_mgmt_interface_config(
+                        startup_cfg, "GigabitEthernet1", "ios"
+                    )
             else:
                 self.logger.warning("User provided startup configuration is not found.")
                 cfg = self.gen_bootstrap_config()

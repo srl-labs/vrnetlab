@@ -74,7 +74,18 @@ class CSR_vm(vrnetlab.VM):
             if os.path.exists(STARTUP_CONFIG_FILE):
                 self.logger.info("Startup configuration file found")
                 with open(STARTUP_CONFIG_FILE, "r") as startup_config:
-                    cfg += startup_config.read()
+                    # Strip any address the appended startup-config sets on the
+                    # mgmt interface so a stale saved/hand-written mgmt address
+                    # can never re-set it after the GigabitEthernet1 stanza
+                    # configured above (IOS-XE applies day0 config top to bottom,
+                    # so a later "ip address" under the same interface wins) --
+                    # otherwise the router comes up "healthy" but unreachable at
+                    # the address clab/DNS expect. Keyed on interface name, not
+                    # address value (the stale value differs from the current
+                    # one, so only the name is invariant).
+                    cfg += vrnetlab.strip_mgmt_interface_config(
+                        startup_config.read(), "GigabitEthernet1", "ios"
+                    )
             else:
                 self.logger.warning(
                     f"User provided startup configuration is not found."
