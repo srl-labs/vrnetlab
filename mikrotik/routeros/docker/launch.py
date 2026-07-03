@@ -123,9 +123,9 @@ class ROS_vm(vrnetlab.VM):
             self.start()
             return
 
-        (ridx, match, res) = self.tn.expect([b"MikroTik Login", b"RouterOS Login"], 1)
+        (ridx, match, res) = self.tn.expect([b"MikroTik Login", b"RouterOS Login", b"CHR Login"], 1)
         if match:  # got a match!
-            if ridx in (0, 1):  # login
+            if ridx in (0, 1, 2):  # login
                 self.logger.debug("VM started")
 
                 # Login
@@ -133,10 +133,13 @@ class ROS_vm(vrnetlab.VM):
                 # Append +ct to username for the plain-text console version
 
                 # Mikrotik decided to change the prompt in the 6.48 line of code it seems
+                # 7.23+ changed default identity to board name; CHR images now show "CHR Login:"
                 if ridx == 0:
                     self.wait_write("admin+ct", wait="MikroTik Login: ")
                 elif ridx == 1:
                     self.wait_write("admin+ct", wait="RouterOS Login: ")
+                elif ridx == 2:
+                    self.wait_write("admin+ct", wait="CHR Login: ")
                 self.wait_write("", wait="Password: ")
 
                 # not happening on arm64
