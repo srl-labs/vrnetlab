@@ -67,8 +67,8 @@ class ROS_vm(vrnetlab.VM):
             ram_size = 256
             cpu_type = "qemu64"
 
-        # the default cpu=host only works when running clab on an amd64 machine
-        extra_args = {} if platform.machine() == "x86_64" else {"cpu": cpu_type}
+        # cpu=host requires both an amd64 image and KVM available on the host
+        extra_args = {} if platform.machine() == "x86_64" and os.path.exists("/dev/kvm") else {"cpu": cpu_type}
 
         super(ROS_vm, self).__init__(username, password, disk_image=disk_image, ram=ram_size, driveif="virtio", arch=arch, **extra_args)
         if self.arch != "aarch64":
