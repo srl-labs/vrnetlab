@@ -598,9 +598,8 @@ class VM:
         tc filter add dev {MGMT_INTF} ingress prio 2 protocol arp flower action mirred egress mirror dev tap0
         # redirect rest of ingress traffic of eth0 to egress of tap0, recomputing
         # L3/L4 checksums first: the host offloads checksums (CHECKSUM_PARTIAL), and
-        # the tc-mirred path to the VM would otherwise deliver packets with bad
-        # checksums that a checksum-strict NOS (e.g. Huawei VRP) silently drops -
-        # breaking all TCP (SSH/NETCONF) to the mgmt IP while ICMP still works.
+        # the tc-mirred path to the VM would otherwise deliver packets with fake
+        # checksums that a checksum-strict NOSes silently drop.
         tc filter add dev {MGMT_INTF} ingress prio 3 flower action csum ip and tcp and udp and icmp pipe action mirred egress redirect dev tap0
 
         tc qdisc add dev tap0 clsact
