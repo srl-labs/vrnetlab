@@ -591,6 +591,45 @@ class VM:
             f.write(ifup_script)
         os.chmod("/etc/tc-tap-ifup", 0o777)
 
+    def create_macvtap(self, i):
+        """Create a passthru macvtap for data interface eth<i>.
+
+        Returns (mac, tapidx): the macvtap's MAC (the guest NIC must use it)
+        and its ifindex, which names the /dev/tap<ifindex> character device
+        qemu attaches to.
+
+        This backs the optional "macvtap" datapath: each data interface is
+        attached to the VM through a passthru macvtap. It is useful on host
+        kernels where the default tc-mirred egress redirect into the tap does
+        not deliver frames to the guest.
+        """
+        intf = f"{self.data_intf_prefix}{i}"
+        macvtap = f"macvtap{i}"
+        run_command(
+            ["ip", "link", "add", "link", intf, "name", macvtap,
+             "type", "macvtap", "mode", "passthru"]
+        )
+        with open(f"/sys/class/net/{intf}/mtu") as f:
+            mtu = f.readline().strip()
+        run_command(["ip", "link", "set", "dev", macvtap, "mtu", mtu])
+        run_command(["ip", "link", "set", "dev", macvtap, "up"])
+        # allmulticast + promisc so the guest receives reserved multicast
+        # (e.g. LACP), not just unicast/broadcast.
+        run_command(["ip", "link", "set", "dev", macvtap, "promisc", "on"])
+        run_command(["ip", "link", "set", "dev", macvtap, "allmulticast", "on"])
+        with open(f"/sys/class/net/{macvtap}/address") as f:
+            mac = f.readline().strip()
+        with open(f"/sys/class/net/{macvtap}/ifindex") as f:
+            tapidx = f.readline().strip()
+        # Some container runtimes have no devtmpfs, so /dev/tap<ifindex> may
+        # not exist. Create it so qemu opens the macvtap character device
+        # instead of the shell fd redirect creating a regular file.
+        with open(f"/sys/class/macvtap/tap{tapidx}/dev") as f:
+            major, minor = f.readline().strip().split(":")
+        run_command(["rm", "-f", f"/dev/tap{tapidx}"])
+        run_command(["mknod", f"/dev/tap{tapidx}", "c", major, minor])
+        return mac, tapidx
+
     def create_tc_tap_mgmt_ifup(self):
         """Create tap ifup script that is used in tc datapath mode, specifically for the management interface"""
         ifup_script = """#!/bin/bash
@@ -901,6 +940,31 @@ class VM:
                         "-netdev",
                         f"socket,id=p{i:02d},listen=:{i + 10000:02d}",
                     ]
+                )
+                continue
+
+            # macvtap passthru datapath (opt-in via CONNECTION_MODE=macvtap).
+            # The guest NIC uses the macvtap's MAC, and qemu attaches to the
+            # macvtap character device over the vhost fd path (a raw macvtap
+            # fd cannot answer TUNGETIFF). start() runs qemu through a shell,
+            # so the fds are opened with bash redirection.
+            if self.conn_mode == "macvtap":
+                mac, tapidx = self.create_macvtap(i)
+                res.append("-device")
+                res.append(
+                    f"{self.nic_type},netdev=p{i:02d},mac={mac}"
+                    + (
+                        f",bus=pci.{pci_bus},addr=0x{addr:x}"
+                        if self.provision_pci_bus
+                        else ""
+                    ),
+                )
+                fd = 100 + i
+                vhfd = 400 + i
+                res.append("-netdev")
+                res.append(
+                    f"tap,id=p{i:02d},fd={fd},vhost=on,vhostfd={vhfd} "
+                    f"{fd}<>/dev/tap{tapidx} {vhfd}<>/dev/vhost-net"
                 )
                 continue
 
