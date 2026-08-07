@@ -10,7 +10,9 @@ import time
 
 import vrnetlab
 
-STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
+# containerlab's arrcus_arcos kind mounts the startup config to
+# /config/startup.cfg and points the STARTUP_CFG env var at it
+STARTUP_CONFIG_FILE = os.getenv("STARTUP_CFG", "/config/startup-config.cfg")
 
 # the ArcOS VM ships with a single built-in user that is used to bootstrap
 # the system via the serial console
@@ -60,6 +62,10 @@ class ArcOS_vm(vrnetlab.VM):
             ram=16384,
             smp="4",
             driveif="virtio",
+            # containerlab's arrcus_arcos kind provisions the data plane
+            # interfaces in the container with the same swpX names they have
+            # in the ArcOS VM
+            data_intf_prefix="swp",
         )
         self.hostname = hostname
         self.conn_mode = conn_mode
@@ -259,6 +265,15 @@ class ArcOS_vm(vrnetlab.VM):
             self.wait_write(line, wait="#")
         # Commit and end
         self.wait_write("commit", wait="#")
+        # the commit is atomic -- a single invalid line rejects the complete
+        # startup configuration, make sure this does not go unnoticed
+        (ridx, match, res) = self.tn.expect(
+            [b"Commit complete", b"Aborted:", b"Error:"], 60
+        )
+        if match and ridx > 0:
+            self.logger.error(
+                f"startup config commit failed: {res.decode(errors='ignore')}"
+            )
         self.wait_write("end", wait="#")
 
 
@@ -275,12 +290,23 @@ if __name__ == "__main__":
     parser.add_argument(
         "--trace", action="store_true", help="enable trace level logging"
     )
-    parser.add_argument("--hostname", default="vr-arcos", help="Router hostname")
-    parser.add_argument("--username", default="vrnetlab", help="Username")
-    parser.add_argument("--password", default="VR-netlab9", help="Password")
+    # containerlab's arrcus_arcos kind does not pass any arguments to the
+    # container, fall back to the environment variables where available
+    parser.add_argument(
+        "--hostname",
+        default=os.getenv("HOSTNAME", "arrcus_aros"),
+        help="Router hostname",
+    )
+    parser.add_argument(
+        "--username", default=os.getenv("USERNAME", "root"), help="Username"
+    )
+    parser.add_argument(
+        "--password", default=os.getenv("PASSWORD", "YouReallyNeedToChangeThis"),
+        help="Password"
+    )
     parser.add_argument(
         "--connection-mode",
-        default="tc",
+        default=os.getenv("CONNECTION_MODE", "tc"),
         help="Connection mode to use in the datapath",
     )
     args = parser.parse_args()

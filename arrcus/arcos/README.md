@@ -24,7 +24,25 @@ The image will be tagged based on the version in the filename, e.g.
 
 The management interface appears as `ma1` in the ArcOS VM and is mapped to
 `eth0` of the container. Data plane interfaces appear as `swp1`, `swp2`, ...
-in the ArcOS VM and are mapped to `eth1`, `eth2`, ... of the container.
+in the ArcOS VM and are mapped to the container interfaces with the same
+`swp1`, `swp2`, ... names, as provisioned by the containerlab `arrcus_arcos`
+kind.
+
+Note that unlike the ArcOS container image, the data plane interfaces of the
+ArcOS VM start at `swp1`, there is no `swp0`.
+
+## Usage with containerlab
+
+```yaml
+topology:
+  nodes:
+    arcos1:
+      kind: arrcus_arcos
+      image: vrnetlab/arrcus_arcos:8.2.1-P5
+      startup-config: arcos1.cfg
+  links:
+    - endpoints: ["arcos1:swp1", "arcos2:swp1"]
+```
 
 ## Tested versions
 
