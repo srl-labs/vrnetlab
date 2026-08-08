@@ -857,17 +857,11 @@ class VM:
         start_eth = self.start_nic_eth_idx
         end_eth = self.start_nic_eth_idx + self.num_nics
 
-        # the mgmt interface is only present in the count of the provisioned
-        # nics if it shares the data plane interface prefix (e.g. eth0 vs swpX)
-        expected_nics = self.num_provisioned_nics
-        if self.mgmt_intf.startswith(self.data_intf_prefix):
-            expected_nics += 1
-
         inf_path = Path("/sys/class/net/")
         while True:
             provisioned_nics = list(inf_path.glob(f"{self.data_intf_prefix}*"))
-            # if we see all expected nics (including mgmt) we are ready to roll!
-            if len(provisioned_nics) >= expected_nics:
+            # if we see num provisioned +1 (for mgmt) we have all nics ready to roll!
+            if len(provisioned_nics) >= self.num_provisioned_nics + 1:
                 nics = [
                     int(re.search(pattern=r"\d+", string=nic.name).group())
                     for nic in provisioned_nics

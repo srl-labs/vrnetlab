@@ -7,6 +7,7 @@ import re
 import signal
 import sys
 import time
+from pathlib import Path
 
 import vrnetlab
 
@@ -72,6 +73,50 @@ class ArcOS_vm(vrnetlab.VM):
         self.num_nics = 16
         self.nic_type = "virtio-net-pci"
         self.ztp_started = False
+
+    def nic_provision_delay(self) -> None:
+        """Wait for the provisioned data plane interfaces to appear
+
+        Same as the base class implementation, except that the management
+        interface is not included in the expected interface count: it (eth0)
+        does not share the swp prefix of the data plane interfaces, so it is
+        not picked up by the interface glob below.
+        """
+        self.logger.debug(
+            f"number of provisioned data plane interfaces is {self.num_provisioned_nics}"
+        )
+
+        # no nics provisioned and/or not running from containerlab so we can bail
+        if self.num_provisioned_nics == 0:
+            return
+
+        self.logger.debug("waiting for provisioned interfaces to appear...")
+
+        start_eth = self.start_nic_eth_idx
+        end_eth = self.start_nic_eth_idx + self.num_nics
+
+        inf_path = Path("/sys/class/net/")
+        while True:
+            provisioned_nics = list(inf_path.glob(f"{self.data_intf_prefix}*"))
+            # if we see all provisioned nics we are ready to roll!
+            if len(provisioned_nics) >= self.num_provisioned_nics:
+                nics = [
+                    int(re.search(pattern=r"\d+", string=nic.name).group())
+                    for nic in provisioned_nics
+                ]
+
+                # Ensure the max eth is in range of allocated eth index of VM LC
+                nics = [nic for nic in nics if nic in range(start_eth, end_eth)]
+
+                if nics:
+                    self.highest_provisioned_nic_num = max(nics)
+
+                self.logger.debug(
+                    f"highest allocated interface id determined to be: {self.highest_provisioned_nic_num}..."
+                )
+                self.logger.debug("interfaces provisioned, continuing...")
+                break
+            time.sleep(5)
 
     def bootstrap_spin(self):
         """This function should be called periodically to do work."""
