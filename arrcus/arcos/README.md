@@ -31,6 +31,18 @@ kind.
 Note that unlike the ArcOS container image, the data plane interfaces of the
 ArcOS VM start at `swp1`, there is no `swp0`.
 
+## Startup configuration
+
+The startup configuration is applied line by line in the ArcOS CLI
+configuration mode and committed at the end. Note that the commit is atomic
+-- a single invalid line (e.g. a reference to an interface that does not
+exist on the VM) rejects the complete startup configuration; the launcher
+logs an error in this case.
+
+Since the lines are fed to the CLI directly, close configuration blocks
+explicitly with `exit` -- unlike in loaded configuration files, `!` lines
+are comments in the CLI and do **not** end a block.
+
 ## Usage with containerlab
 
 ```yaml
