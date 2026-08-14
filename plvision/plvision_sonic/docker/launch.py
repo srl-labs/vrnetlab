@@ -47,8 +47,11 @@ class PLVision_SONiC_VM(vrnetlab.VM):
             if re.search(".qcow2$", e):
                 disk_image = "/" + e
                 break
+        # Lite-X images boot with root=/dev/vda1 and need a virtio disk.
+        # Classic SONiC Lite/LTS images use IDE (/dev/sda).
+        driveif = os.getenv("SONIC_DRIVEIF", "ide").strip().lower()
         super(PLVision_SONiC_VM, self).__init__(
-            username, password, disk_image=disk_image, ram=4096
+            username, password, disk_image=disk_image, ram=4096, driveif=driveif
         )
         self.qemu_args.extend(["-smp", "2"])
         self.nic_type = "virtio-net-pci"
