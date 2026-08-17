@@ -29,7 +29,7 @@ marker="GOLDEN_PROVISIONED_OK"
 
 # Default the image reference to the tag recorded in the tarball.
 xrd_ref=${XRD_IMAGE_REF:-$(tar -xOf "$XRD_IMAGE_TAR" manifest.json \
-    | sed -E 's/.*"RepoTags":\["([^"]+)".*/\1/')}
+    | sed -E 's/.*"RepoTags":\s*\["([^"]+)".*/\1/')}
 [ -n "$xrd_ref" ] || { echo "ERROR: could not determine XRd image reference" >&2; exit 1; }
 echo "XRd image reference: $xrd_ref"
 
