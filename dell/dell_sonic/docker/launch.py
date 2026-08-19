@@ -48,9 +48,8 @@ class Dell_Sonic_VM(vrnetlab.VM):
                 disk_image = "/" + e
                 break
         super(Dell_Sonic_VM, self).__init__(
-            username, password, disk_image=disk_image, ram=4096
+            username, password, disk_image=disk_image, ram=4096, smp="2"
         )
-        self.qemu_args.extend(["-smp", "2"])
         self.nic_type = "virtio-net-pci"
         self.conn_mode = conn_mode
         self.num_nics = 10

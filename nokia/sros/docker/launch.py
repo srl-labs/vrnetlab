@@ -1343,23 +1343,6 @@ class SROS_vm(vrnetlab.VM):
         # close scrapli device driver
         self.sros_con.close()
 
-    @property
-    def ram(self):
-        """Ignore environment variables here, since getMem function is used"""
-        return self._ram
-
-    @property
-    def cpu(self):
-        """Ignore environment variables here, since CPU environment variable is used for number of cpus in getCPU function"""
-
-        return str(self._cpu)
-
-    @property
-    def smp(self):
-        """Ignore environment variables here, since CPU environment variable is used for number of cpus in getCPU function"""
-
-        return str(self._smp)
-
 
 class SROS_integrated(SROS_vm):
     """Integrated VSR-SIM"""

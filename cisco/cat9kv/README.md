@@ -18,6 +18,7 @@ Eight interfaces will always appear regardless if you have defined any links in 
 Copy the Cat9kv or C9800-CL .qcow2 file in this directory and you can perform `make docker-image`. On average the image takes approxmiately ~4 minutes to build as an initial install process occurs.
 
 The build process automatically detects whether you're building a cat9kv or c9800cl image based on the filename:
+
 - Files containing "c9800" build as `cisco_c9800cl:VERSION`
 - Other files build as `cisco_cat9kv:VERSION`
 
@@ -32,9 +33,11 @@ To configure the Q200 image or enable a higher throughput dataplane for UADP; yo
 Known working versions:
 
 **Cat9kv:**
+
 - cat9kv-prd-17.12.01prd9.qcow2 (UADP & Q200)
 
 **C9800-CL:**
+
 - The C9800-CL uses the same IOS-XE base as Cat9kv and should work with versions 17.x and newer
 - Example filename: C9800-CL-universalk9.17.15.04b.qcow2
 
@@ -90,8 +93,8 @@ You can also use interface aliases of `GigabitEthernet1/0/x` or `Gi1/0/x`
 
 | Environment Variable  | Default       |
 | --------------------- | ------------- |
-| VCPU                  | 4             |
-| RAM                   | 18432         |
+| QEMU_SMP              | 4             |
+| QEMU_MEMORY           | 18432         |
 
 ### Example
 
@@ -103,8 +106,8 @@ topology:
       kind: cisco_cat9kv
       image: vrnetlab/vr-cat9kv:17.12.01
     env:
-        VCPU: 6
-        RAM: 12288
+        QEMU_SMP: 6
+        QEMU_MEMORY: 12288
 ```
 
 ## System requirements

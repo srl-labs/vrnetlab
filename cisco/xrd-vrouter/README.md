@@ -26,13 +26,13 @@ Per running node, XRd vRouter needs:
 - **RAM** — ~5 GiB minimum; the launcher defaults to **10 GiB**, with a hard floor of **8 GiB**.
 - **Hugepages** — 3 GiB of 1 GiB hugepages.
 
-Tune vCPU/RAM with the `VCPU` / `RAM` node env. The 10 GiB default is comfortable; drop toward the 8 GiB floor only to fit more nodes on a host — at 8 GiB an idle node booted and forwarded with ~800 MB to spare, which leaves little headroom for feature-heavy configs.
+Tune vCPU/RAM with the `QEMU_SMP` / `QEMU_MEMORY` node env. The 10 GiB default is comfortable; drop toward the 8 GiB floor only to fit more nodes on a host — at 8 GiB an idle node booted and forwarded with ~800 MB to spare, which leaves little headroom for feature-heavy configs.
 
 Unlike the control-plane `cisco_xrd`, the elevated inotify limits XR needs are tuned inside the micro-VM, so no host inotify tuning is required.
 
 ## Usage with containerlab
 
-Use the dedicated [`cisco_xrd_vrouter`](https://containerlab.srlinux.dev/manual/kinds/cisco_xrd_vrouter/) kind — it ships XRd vRouter's tuned defaults (4 vCPU / 10 GiB). The stock [`cisco_xrv9k`](https://containerlab.srlinux.dev/manual/kinds/vr-xrv9k/) kind is **also** compatible (XRd vRouter is IOS XR), but it defaults to XRv9k's heavier 2 vCPU / 16 GiB, so set `RAM` explicitly there.
+Use the dedicated [`cisco_xrd_vrouter`](https://containerlab.srlinux.dev/manual/kinds/cisco_xrd_vrouter/) kind — it ships XRd vRouter's tuned defaults (4 vCPU / 10 GiB). The stock [`cisco_xrv9k`](https://containerlab.srlinux.dev/manual/kinds/vr-xrv9k/) kind is **also** compatible (XRd vRouter is IOS XR), but it defaults to XRv9k's heavier 2 vCPU / 16 GiB, so set `QEMU_MEMORY` explicitly there.
 
 ```yaml
 name: xrd
