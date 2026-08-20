@@ -131,9 +131,11 @@ class PLVision_SONiC_VM(vrnetlab.VM):
                 f"while ! /usr/sbin/ip link show eth0 | grep -q \"state UP\"; do sleep 1; done;/usr/sbin/ip -6 route add default via {self.mgmt_gw_ipv6} dev eth0",
                 "#"
             )
-        self.wait_write("passwd -q %s" % (self.username))
-        self.wait_write(self.password, "New password:")
-        self.wait_write(self.password, "password:")
+        # Doesn't work for Lite-Embedded (SONiC X) images
+        # Comment it out until the fix is released in the future version
+        # self.wait_write("passwd -q %s" % (self.username))
+        # self.wait_write(self.password, "New password:")
+        # self.wait_write(self.password, "password:")
         self.wait_write("sleep 1", "#")
         self.wait_write("hostnamectl set-hostname %s" % (self.hostname))
         self.wait_write("sleep 1", "#")

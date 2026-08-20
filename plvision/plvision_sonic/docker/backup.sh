@@ -74,8 +74,8 @@ backup() {
 }
 
 wait_for_ssh() {
-    local max_retries=30
-    local retry_interval=2
+    local max_retries=${1:-30}
+    local retry_interval=${2:-2}
 
     for ((i=1; i<=$max_retries; i++)); do
         echo "Waiting for VM's SSH to become available... (Attempt $i/$max_retries)"
@@ -94,11 +94,27 @@ restore() {
     if [ -f "$BACKUP_FILE" ]; then
         echo "Copying startup config file to the VM..."
 
-        if wait_for_ssh; then
-            $SCP_CMD $BACKUP_FILE $HOST:$TMP_FILE && $SSH_CMD $HOST "sudo config replace $TMP_FILE && sudo config save -y"
-        else
+        if ! wait_for_ssh; then
             echo "Failed to establish SSH connection. Config copy operation aborted."
+            return 1
         fi
+
+        $SCP_CMD $BACKUP_FILE $HOST:$TMP_FILE || return 1
+
+        # SONiC X boots with a factory ConfigDB, then initializes SAI/host
+        # interfaces from the platform default MAC. config replace only patches
+        # ConfigDB and leaves those objects in place, so DEVICE_METADATA.mac
+        # never reaches the dataplane. config reload restarts swss/syncd and
+        # re-creates RIFs from the installed config_db.json.
+        echo "Installing startup config and reloading SONiC..."
+        $SSH_CMD $HOST "sudo cp $TMP_FILE $REMOTE_FILE && sudo config reload -y -f" || true
+
+        echo "Waiting for SONiC to come back after config reload..."
+        if ! wait_for_ssh 90 2; then
+            echo "SSH did not return after config reload."
+            return 1
+        fi
+        echo "Startup config applied via config reload."
     else
         echo "$BACKUP_FILE not found. Nothing to push to the VM."
     fi
