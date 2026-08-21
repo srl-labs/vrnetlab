@@ -16,8 +16,12 @@
 #    back to the configured value and disabling expiry.
 #
 # 4. MEDIUM boot timeout — First boot typically completes within 3–5 minutes.
+#
+# 5. STARTUP CONFIG — Optional NVUE YAML at /config/startup.yaml (same /config
+#    mount convention as other vrnetlab images) applied via startup_config().
 # ==============================================================================
 
+import base64
 import datetime
 import logging
 import os
@@ -61,6 +65,8 @@ logging.Logger.trace = trace
 # ── tunables ────────────────────────────────────────────────────────────────────
 
 DEFAULT_RAM_MB = 4096
+
+STARTUP_CONFIG_FILE = "/config/startup.yaml"
 
 
 # ── VM subclass ─────────────────────────────────────────────────────────────────
@@ -179,13 +185,14 @@ class CumulusVX_vm(vrnetlab.VM):
         # If first-boot setup is already done, poll switchd directly via
         # the active serial session (no login prompt needed).
         if self._bootstrap_done:
-            if not self._switchd_is_ready():
+            if not self._platform_is_ready():
                 self.spins += 1
                 return
-            self.running = True
+            self.startup_config()
             self.tn.close()
             startup_time = datetime.datetime.now() - self.start_time
             self.logger.info("Startup complete in: %s", startup_time)
+            self.running = True
             return
 
         (ridx, match, res) = self.tn.expect(
@@ -219,18 +226,63 @@ class CumulusVX_vm(vrnetlab.VM):
 
         self.spins += 1
 
-    def _switchd_is_ready(self):
-        """Check whether switchd is active via the serial console."""
+    def _platform_is_ready(self):
+        """Check switchd and nvued are active via the serial console.
+
+        telnetlib expect() uses regex substring search, so bare patterns like
+        b"active" falsely match "is-active" and "inactive". Use sentinels.
+        """
         self.wait_write("\r", None)
-        self.wait_write("systemctl is-active switchd 2>/dev/null", None)
-        time.sleep(2)
+        self.wait_write(
+            "printf '__VR_switchd_%s__ __VR_nvued_%s__\\n' "
+            "$(systemctl is-active switchd 2>/dev/null) "
+            "$(systemctl is-active nvued 2>/dev/null)",
+            None,
+        )
+        time.sleep(1)
         try:
-            (_, match, _) = self.tn.expect([b"active", b"inactive", b"failed"], 3)
+            (_, match, res) = self.tn.expect(
+                [rb"__VR_switchd_active__ __VR_nvued_active__"],
+                5,
+            )
             if match:
-                return match.group(0) == b"active"
-        except Exception:
-            pass
+                return True
+            self.logger.debug(
+                "Platform not ready (console tail): %s",
+                res.decode(errors="replace")[-300:],
+            )
+        except Exception as exc:
+            self.logger.debug("Platform readiness check failed: %s", exc)
         return False
+
+    def startup_config(self):
+        """Load additional config provided by user."""
+
+        if not os.path.exists(STARTUP_CONFIG_FILE):
+            self.logger.trace(
+                "Startup config file %s is not found", STARTUP_CONFIG_FILE
+            )
+            return
+
+        self.logger.trace("Startup config file %s exists", STARTUP_CONFIG_FILE)
+        self.logger.info("Applying startup config from %s", STARTUP_CONFIG_FILE)
+
+        guest_path = "/tmp/vrnetlab-startup.yaml"
+        with open(STARTUP_CONFIG_FILE, "rb") as startup_config:
+            encoded = base64.b64encode(startup_config.read()).decode("ascii")
+
+        self.wait_write(f"rm -f {guest_path} /tmp/.vrnetlab.b64", None)
+        for offset in range(0, len(encoded), 900):
+            chunk = encoded[offset : offset + 900]
+            self.wait_write("printf '%s' >> /tmp/.vrnetlab.b64" % chunk, None)
+        self.wait_write(
+            "base64 -d /tmp/.vrnetlab.b64 > %s && rm -f /tmp/.vrnetlab.b64"
+            % guest_path,
+            None,
+        )
+        self.wait_write("nv config patch %s" % guest_path, None)
+        self.wait_write("nv config apply --assume-yes", None)
+        self.wait_write("rm -f %s" % guest_path, None)
 
     def _first_boot_setup(self):
         """Handle Cumulus VX first-boot forced password change."""
