@@ -73,6 +73,8 @@ STARTUP_CONFIG_FILE = "/config/startup.yaml"
 
 
 class CumulusVX_vm(vrnetlab.VM):
+    SHELL_PROMPT = ":~$"
+
     def __init__(self, hostname, username, password, conn_mode):
         # ── locate the Cumulus VX disk image ──────────────────────────────────
         disk_image = None
@@ -112,6 +114,7 @@ class CumulusVX_vm(vrnetlab.VM):
             ram=DEFAULT_RAM_MB,
             cpu=cpu_model,
         )
+        self.wait_pattern = self.SHELL_PROMPT
 
         self.logger.info(f"Using Cumulus VX disk image: {disk_image}")
 
@@ -189,6 +192,13 @@ class CumulusVX_vm(vrnetlab.VM):
                 self.spins += 1
                 return
             self.startup_config()
+            if not self._logout_console():
+                self.logger.error(
+                    "Serial console logout failed — retrying "
+                    "(NVUE may block user replacement while logged in)"
+                )
+                self.spins += 1
+                return
             self.tn.close()
             startup_time = datetime.datetime.now() - self.start_time
             self.logger.info("Startup complete in: %s", startup_time)
@@ -280,9 +290,30 @@ class CumulusVX_vm(vrnetlab.VM):
             % guest_path,
             None,
         )
-        self.wait_write("nv config patch %s" % guest_path, None)
-        self.wait_write("nv config apply --assume-yes", None)
-        self.wait_write("rm -f %s" % guest_path, None)
+        self.wait_write("nv config patch %s" % guest_path, timeout=120)
+        self.wait_write("nv config apply --assume-yes", timeout=300)
+        self.wait_write("rm -f %s" % guest_path, timeout=15)
+
+    def _logout_console(self):
+        """End the serial console session before closing telnet.
+
+        NVUE refuses to delete a user that still has an active console login.
+        Returns True when the login prompt is observed after logout.
+        """
+        self.logger.info("Logging out serial console session")
+        self.wait_write("logout", None)
+        (_, match, res) = self.tn.expect(
+            [b"login: ", b"Login: ", b"cumulus login: "],
+            30,
+        )
+        if match:
+            self.logger.debug("Serial console login prompt detected after logout")
+            return True
+        self.logger.error(
+            "Login prompt not detected after logout (console tail): %s",
+            res.decode(errors="replace")[-300:],
+        )
+        return False
 
     def _first_boot_setup(self):
         """Handle Cumulus VX first-boot forced password change."""
@@ -319,13 +350,12 @@ class CumulusVX_vm(vrnetlab.VM):
             'echo "%s ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/%s && '
             "hostnamectl set-hostname %s'"
             % (NEW_PASS, VM_USER, VM_USER, VM_USER, self.hostname),
-            None,
+            timeout=30,
         )
-        time.sleep(3)
 
         # Step 4 — verify shell is still responsive (password was
         # already changed by PAM in step 2)
-        self.wait_write("\r", None)
+        self.wait_write("\r", timeout=30)
         (_, m2, _) = self.tn.expect([b"$ ", b"# ", b"@"], 8)
         if m2:
             self.logger.info("Password verified: '%s' / '%s'", VM_USER, NEW_PASS)
