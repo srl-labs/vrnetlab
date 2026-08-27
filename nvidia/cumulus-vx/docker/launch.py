@@ -122,7 +122,7 @@ class CumulusVX_vm(vrnetlab.VM):
         # the base class dummy-NIC (socket placeholder) logic fills any
         # gaps, giving correct swpX numbering even with sparse topology
         # interface indices (e.g. eth1, eth4, eth6, eth7).
-        self.num_nics = 16
+        self.num_nics = 64
         self.nic_type = "virtio-net-pci"
 
         # NVUE REST API (HTTPS on 8765) — 8080 is already in the base class
