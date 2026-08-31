@@ -1,7 +1,6 @@
-FROM ghcr.io/srl-labs/vrnetlab-base:0.2.1
+FROM ghcr.io/srl-labs/vrnetlab-base:0.3.0
 LABEL maintainer="Andreas Cymbal takalele@konnex.me"
 
-ARG DEBIAN_FRONTEND=noninteractive
 
 RUN uv add click
 

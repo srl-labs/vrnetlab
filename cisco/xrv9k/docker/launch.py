@@ -15,6 +15,7 @@ STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
 # OVMF for UEFI boot major version 25+
 ovmf_code = "/OVMF.fd"
 
+
 def handle_SIGCHLD(signal, frame):
     os.waitpid(-1, os.WNOHANG)
 
@@ -40,6 +41,19 @@ def trace(self, message, *args, **kws):
 logging.Logger.trace = trace
 
 
+def select_cpu_model():
+    """Pick the QEMU -cpu model based on the host CPU vendor."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            cpuinfo = f.read()
+    except OSError:
+        cpuinfo = ""
+
+    if "AuthenticAMD" in cpuinfo:
+        return "qemu64,+ssse3,+sse4.1,+sse4.2"
+    return "host,+ssse3,+sse4.1,+sse4.2,+x2apic"
+
+
 class XRv9k_vm(vrnetlab.VM):
     def __init__(
         self, hostname, username, password, nics, conn_mode, vcpu, ram, install=False
@@ -48,24 +62,25 @@ class XRv9k_vm(vrnetlab.VM):
         for e in sorted(os.listdir("/")):
             if not disk_image and re.search(".qcow2", e):
                 disk_image = "/" + e
+        cpu = select_cpu_model()
         super(XRv9k_vm, self).__init__(
             username,
             password,
             disk_image=disk_image,
             ram=ram,
             smp=f"cores={vcpu},threads=1,sockets=1",
-            use_scrapli=True,
-            cpu="host,+ssse3,+sse4.1,+sse4.2,+x2apic",
+            cpu=cpu,
         )
-        
+        self.logger.info(f"Selected QEMU CPU model: {cpu}")
+
         # extract version num
         version = ""
 
         try:
             version = self.version
-        except: #noqa: E722
+        except:  # noqa: E722
             version = re.search(r"\d+(?:\.\d+)+", self.image).group(0)
-        
+
         version_parts = version.split(".")
         self.version_major = int(version_parts[0])
         self.version_minor = int(version_parts[1]) if len(version_parts) > 1 else 0
@@ -111,7 +126,7 @@ class XRv9k_vm(vrnetlab.VM):
                     continue
                 if arg == "-drive":
                     if i + 1 < len(self.qemu_args):
-                        drive_arg = self.qemu_args[i+1]
+                        drive_arg = self.qemu_args[i + 1]
                         if "if=ide" in drive_arg or ".qcow2" in drive_arg:
                             # Extract file=... from the drive_arg
                             match = re.search(r"file=([^,]+)", drive_arg)
@@ -123,18 +138,22 @@ class XRv9k_vm(vrnetlab.VM):
             self.qemu_args = new_args
 
             # Add virtio-blk-pci disk configuration using the overlay created by vrnetlab core
-            self.qemu_args.extend([
-                "-drive",
-                f"file={disk_file},if=none,id=drive-virtio-disk0,format=qcow2",
-                "-device",
-                "virtio-blk-pci,drive=drive-virtio-disk0,id=virtio-disk0",
-            ])
-            
+            self.qemu_args.extend(
+                [
+                    "-drive",
+                    f"file={disk_file},if=none,id=drive-virtio-disk0,format=qcow2",
+                    "-device",
+                    "virtio-blk-pci,drive=drive-virtio-disk0,id=virtio-disk0",
+                ]
+            )
+
             # Attach OVMF
-            self.qemu_args.extend([
-                "-drive",
-                f"if=pflash,format=raw,unit=0,readonly=on,file={ovmf_code}",
-            ])
+            self.qemu_args.extend(
+                [
+                    "-drive",
+                    f"if=pflash,format=raw,unit=0,readonly=on,file={ovmf_code}",
+                ]
+            )
 
     def gen_mgmt(self):
         """Generate qemu args for the mgmt interface(s)"""
@@ -222,7 +241,9 @@ class XRv9k_vm(vrnetlab.VM):
         return
 
     def apply_config(self):
-        scrapli_timeout = vrnetlab.getenv_uint("SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT)
+        scrapli_timeout = vrnetlab.getenv_uint(
+            "SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT
+        )
         self.logger.info(
             f"Scrapli timeout is {scrapli_timeout}s (default {vrnetlab.DEFAULT_SCRAPLI_TIMEOUT}s)"
         )
@@ -240,6 +261,13 @@ class XRv9k_vm(vrnetlab.VM):
             "timeout_ops": scrapli_timeout,
         }
 
+        ipv6_route = self.render_optional_mgmt_config(
+            "::/0 {gateway}", gateway=self.mgmt_gw_ipv6
+        )
+        ipv6_address = self.render_optional_mgmt_config(
+            "ipv6 address {address}", address=self.mgmt_address_ipv6
+        )
+
         xrv9k_config = f"""hostname {self.hostname}
 vrf clab-mgmt
 description Containerlab management VRF (DO NOT DELETE)
@@ -253,14 +281,14 @@ vrf clab-mgmt
 address-family ipv4 unicast
 0.0.0.0/0 {self.mgmt_gw_ipv4}
 address-family ipv6 unicast
-::/0 {self.mgmt_gw_ipv6}
+{ipv6_route}
 root
 !
 interface MgmtEth 0/RP0/CPU0/0
 description Containerlab management interface
 vrf clab-mgmt
 ipv4 address {self.mgmt_address_ipv4}
-ipv6 address {self.mgmt_address_ipv6}
+{ipv6_address}
 no shutdown
 exit
 !

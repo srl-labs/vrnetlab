@@ -62,11 +62,26 @@ class VJUNOSROUTER_vm(vrnetlab.VM):
         with open("init.conf", "r") as file:
             cfg = file.read()
 
-        cfg = cfg.replace("{MGMT_IP_IPV4}", self.mgmt_address_ipv4)
-        cfg = cfg.replace("{MGMT_GW_IPV4}", self.mgmt_gw_ipv4)
-        cfg = cfg.replace("{MGMT_IP_IPV6}", self.mgmt_address_ipv6)
-        cfg = cfg.replace("{MGMT_GW_IPV6}", self.mgmt_gw_ipv6)
-        cfg = cfg.replace("{HOSTNAME}", self.hostname)
+        ipv6_address_config = self.render_optional_mgmt_config(
+            "family inet6 {\n                address {address};\n            }",
+            address=self.mgmt_address_ipv6,
+        )
+        ipv6_route_config = self.render_optional_mgmt_config(
+            "rib mgmt_junos.inet6.0 {\n"
+            "                static {\n"
+            "                    route ::/0 next-hop {gateway};\n"
+            "                }\n"
+            "            }",
+            address=self.mgmt_address_ipv6,
+            gateway=self.mgmt_gw_ipv6,
+        )
+        cfg = (
+            cfg.replace("{MGMT_IP_IPV4}", self.mgmt_address_ipv4)
+            .replace("{MGMT_GW_IPV4}", self.mgmt_gw_ipv4)
+            .replace("{MGMT_IPV6_ADDRESS_CONFIG}", ipv6_address_config)
+            .replace("{MGMT_IPV6_ROUTE_CONFIG}", ipv6_route_config)
+            .replace("{HOSTNAME}", self.hostname)
+        )
 
         # write changes to init.conf file
         with open("init.conf", "w") as file:
@@ -141,7 +156,6 @@ class VJUNOSROUTER_vm(vrnetlab.VM):
 
                 _, loginMatch, _ = self.tn.expect([b"login:"], 1)
                 if loginMatch:
-
                     self.logger.info("Login prompt found")
 
                     # close telnet connection

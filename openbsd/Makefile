@@ -11,7 +11,7 @@ VERSION=$(shell echo $(IMAGE) | sed -e 's/openbsd-min_v\([0-9]\.[0-9]\)_.*/\1/')
 -include ../makefile.include
 
 download:
-        /bin/bash download.sh
+	/bin/bash download.sh
 
 build: download
-        $(MAKE) docker-image
+	$(MAKE) docker-image

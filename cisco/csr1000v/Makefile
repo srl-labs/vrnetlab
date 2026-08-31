@@ -17,5 +17,5 @@ docker-pre-build:
 
 docker-build: docker-build-common
 	docker run --cidfile cidfile --privileged $(REGISTRY)$(VENDOR)_$(NAME):$(VERSION) --trace --install
-	docker commit --change='ENTRYPOINT ["/launch.py"]' $$(cat cidfile) $(REGISTRY)$(VENDOR)_$(NAME):$(VERSION)
+	docker commit --change='ENTRYPOINT ["uv", "run", "/launch.py"]' $$(cat cidfile) $(REGISTRY)$(VENDOR)_$(NAME):$(VERSION)
 	docker rm -f $$(cat cidfile)

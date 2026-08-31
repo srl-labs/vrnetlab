@@ -1,7 +1,7 @@
-FROM public.ecr.aws/docker/library/debian:bookworm-slim
+FROM public.ecr.aws/docker/library/debian:trixie-slim
 LABEL org.opencontainers.image.authors="roman@dodin.dev"
 
-COPY --from=ghcr.io/astral-sh/uv:0.5.18 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.23 /uv /uvx /bin/
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -25,6 +25,8 @@ RUN apt-get update -qy \
    dosfstools \
    genisoimage \
    ovmf \
+   cloud-utils \
+   sshpass \
    && rm -rf /var/lib/apt/lists/*
 
 # copying the uv project

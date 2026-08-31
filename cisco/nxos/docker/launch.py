@@ -50,7 +50,6 @@ class NXOS_vm(vrnetlab.VM):
             disk_image=disk_image,
             ram=4096,
             smp="2",
-            use_scrapli=True,
         )
         self.credentials = [["admin", "admin"]]
         self.hostname = hostname
@@ -103,7 +102,9 @@ class NXOS_vm(vrnetlab.VM):
         return
 
     def apply_config(self):
-        scrapli_timeout = vrnetlab.getenv_uint("SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT)
+        scrapli_timeout = vrnetlab.getenv_uint(
+            "SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT
+        )
         self.logger.info(
             f"Scrapli timeout is {scrapli_timeout}s (default {vrnetlab.DEFAULT_SCRAPLI_TIMEOUT}s)"
         )
@@ -118,17 +119,24 @@ class NXOS_vm(vrnetlab.VM):
             "timeout_ops": scrapli_timeout,
         }
 
+        ipv6_route = self.render_optional_mgmt_config(
+            "ipv6 route ::/0 {gateway}", gateway=self.mgmt_gw_ipv6
+        )
+        ipv6_address = self.render_optional_mgmt_config(
+            "ipv6 address {address}", address=self.mgmt_address_ipv6
+        )
+
         nxos_config = f"""hostname {self.hostname}
 username {self.username} password 0 {self.password} role network-admin
 !
 vrf context management
 ip route 0.0.0.0/0 {self.mgmt_gw_ipv4}
-ipv6 route ::/0 {self.mgmt_gw_ipv6}
+{ipv6_route}
 exit
 !
 interface mgmt0
 ip address {self.mgmt_address_ipv4}
-ipv6 address {self.mgmt_address_ipv6}
+{ipv6_address}
 exit
 !
 no feature ssh

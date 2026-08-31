@@ -1,4 +1,4 @@
-FROM ghcr.io/srl-labs/vrnetlab-base:0.2.1
+FROM ghcr.io/srl-labs/vrnetlab-base:0.3.0
 LABEL org.opencontainers.image.authors="roman@dodin.dev,vista@birb.network"
 
 ARG IMAGE

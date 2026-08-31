@@ -53,7 +53,6 @@ class ASAv_vm(vrnetlab.VM):
             disk_image=disk_image,
             ram=2048,
             cpu="Nehalem",
-            use_scrapli=True,
         )
         self.hostname = hostname
         self.nic_type = "e1000"
@@ -109,12 +108,16 @@ class ASAv_vm(vrnetlab.VM):
         """Apply the full configuration"""
         self.logger.debug("Applying bootstrap configuration")
 
-        scrapli_timeout = vrnetlab.getenv_uint("SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT)
+        scrapli_timeout = vrnetlab.getenv_uint(
+            "SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT
+        )
 
         def _open(conn):
             """Set the internal privilege level to 'exec' so scrapli knows what to do"""
             conn._current_priv_level = conn.privilege_levels["exec"]
-            self.logger.debug("Set initial privilege level to 'exec' to boostrap configuration")
+            self.logger.debug(
+                "Set initial privilege level to 'exec' to boostrap configuration"
+            )
 
         asa_scrapli_dev = {
             "platform": "cisco_asa",
@@ -141,18 +144,28 @@ class ASAv_vm(vrnetlab.VM):
                 (self.password, r"", False),
                 ("", r"ciscoasa#", False),
             ],
-            privilege_level="exec"
+            privilege_level="exec",
         )
 
         self.logger.debug("Entering configuration mode to handle reporting prompt")
         result = con.send_interactive(
             [
-                ("configure terminal", r"Would you like to enable anonymous error reporting", False),
+                (
+                    "configure terminal",
+                    r"Would you like to enable anonymous error reporting",
+                    False,
+                ),
                 ("N", r"(config)#", False),
             ]
         )
 
         v4_mgmt_address = vrnetlab.cidr_to_ddn(self.mgmt_address_ipv4)
+        ipv6_address = self.render_optional_mgmt_config(
+            "ipv6 address {address}", address=self.mgmt_address_ipv6
+        )
+        ipv6_route = self.render_optional_mgmt_config(
+            "route management ::/0 {gateway} 1", gateway=self.mgmt_gw_ipv6
+        )
 
         config_commands = f"""hostname {self.hostname}
 aaa authentication ssh console LOCAL
@@ -162,11 +175,11 @@ interface Management0/0
 nameif management
 security-level 100
 ip address {v4_mgmt_address[0]} {v4_mgmt_address[1]}
-ipv6 address {self.mgmt_address_ipv6}
+{ipv6_address}
 no shutdown
 exit
 route management 0.0.0.0 0.0.0.0 {self.mgmt_gw_ipv4} 1
-route management ::/0 {self.mgmt_gw_ipv6} 1
+{ipv6_route}
 access-list MGMT_IN extended permit tcp any any eq ssh
 access-group MGMT_IN in interface management
 crypto key generate ecdsa elliptic-curve 256
@@ -178,7 +191,7 @@ ssh timeout 60"""
 
         self.logger.debug("Sending configuration commands")
         con.send_configs(config_commands.splitlines())
-        
+
         # Apply user-provided startup configuration if present
         if os.path.exists(STARTUP_CONFIG_FILE):
             self.logger.info("Startup configuration file found")
@@ -188,7 +201,7 @@ ssh timeout 60"""
                 con.send_configs(startup_config.splitlines())
         else:
             self.logger.info("User provided startup configuration is not found.")
-        
+
         self.logger.debug("Saving configuration")
         # Exit to privilege exec mode then save
         con.acquire_priv("privilege_exec")

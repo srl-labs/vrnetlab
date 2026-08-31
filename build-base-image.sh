@@ -9,5 +9,5 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-sudo docker build -t ghcr.io/srl-labs/vrnetlab-base:$1 \
+sudo docker buildx build -t ghcr.io/srl-labs/vrnetlab-base:$1 \
     -f vrnetlab-base.dockerfile .

@@ -81,9 +81,12 @@ class VRP_vm(vrnetlab.VM):
         )
 
         # Ex-Configuration for machine type and SATA controller tests (this is probably not needed but doesn't hurt either)
-        self.qemu_args.extend([
-            "-machine", "pc-q35-6.2",  # Use q35 machine type for better SATA support
-        ])
+        self.qemu_args.extend(
+            [
+                "-machine",
+                "pc-q35-6.2",  # Use q35 machine type for better SATA support
+            ]
+        )
 
         self.hostname = hostname
         self.conn_mode = conn_mode
@@ -98,6 +101,9 @@ class VRP_vm(vrnetlab.VM):
             self.stop()
             self.start()
             return
+
+        # Nudge the console so the prompt is re-printed if a previous read consumed it.
+        self.tn.write(b"\r\n")
 
         # First check for prompt
         (ridx, match, res) = self.tn.expect([b"<HUAWEI>"], 1)
@@ -123,9 +129,8 @@ class VRP_vm(vrnetlab.VM):
                     self.logger.info(f"DEVICE: {line}")
             self.spins = 0  # reset spin counter if we saw anything
 
-        # If prompt matched do config
-        if match and ridx == 0:
-            
+        # If prompt matched (via expect OR drained into full_output) do config
+        if (match and ridx == 0) or (b"<HUAWEI>" in full_output):
             # fetch VRP version first
             self.logger.info("Fetching VRP version...")
             self.tn.write(b"display version\n")
@@ -134,10 +139,11 @@ class VRP_vm(vrnetlab.VM):
 
             # extract VRP version
             import re
+
             # Look for something like V800R011C00 (ignore SPC part)
             m = re.search(r"(V\d+R\d+C\d+)", output)
             if m:
-                self.vm_version = m.group(1)   # only the first part
+                self.vm_version = m.group(1)  # only the first part
                 self.logger.info(f"Detected VRP version: {self.vm_version}")
             else:
                 self.vm_version = "UNKNOWN"
@@ -159,56 +165,106 @@ class VRP_vm(vrnetlab.VM):
 
         return
 
+    def wait_write(
+        self,
+        cmd,
+        wait="__defaultpattern__",
+        con=None,
+        clean_buffer=False,
+        hold="",
+        timeout=20,
+    ):
+        """Bound every VRP console wait with a timeout.
+
+        On VRP V800R023 the device in mmi-mode does not always re-print the ']'
+        prompt (notably after 'clear configuration this' on the mgmt interface),
+        and telnetlib read_until() blocks with no timeout, deadlocking the
+        bootstrap. Defaulting to a finite timeout degrades a missed prompt to a
+        wait-then-proceed (mmi-mode still executes the queued command) instead of
+        a permanent hang.
+        """
+        super().wait_write(
+            cmd,
+            wait=wait,
+            con=con,
+            clean_buffer=clean_buffer,
+            hold=hold,
+            timeout=timeout,
+        )
+
     def bootstrap_mgmt_interface(self):
         # wait for system to become ready for configuration
         # otherwise we might see Error: The system is busy in building configuration. Please wait for a moment...
-        self.logger.info("bootstrap_mgmt_interface - Sleeping for another 60s to wait for the system to become ready...()")
+        self.logger.info(
+            "bootstrap_mgmt_interface - Sleeping for another 60s to wait for the system to become ready...()"
+        )
         time.sleep(60)
         self.wait_write(cmd="mmi-mode enable", wait=None)
         self.wait_write(cmd="system-view", wait=">")
         self.wait_write(cmd="ip vpn-instance __MGMT_VPN__", wait="]")
         self.wait_write(cmd="ipv4-family", wait="]")
         self.wait_write(cmd="quit", wait="]")
+        if self.mgmt_address_ipv6 and self.mgmt_address_ipv6 != "dhcp":
+            self.wait_write(cmd="ipv6-family", wait="]")
+            self.wait_write(cmd="quit", wait="]")
         self.wait_write(cmd="quit", wait="]")
         if self.vm_type == "CE12800":
             mgmt_interface = "MEth"
         if self.vm_type == "NE40E":
             mgmt_interface = "GigabitEthernet"
         self.wait_write(cmd=f"interface {mgmt_interface} 0/0/0", wait="]")
-        while True:
+        # NOTE: 'clear configuration this' on V800R023 in mmi-mode deadlocks the
+        # bootstrap (the mmi action-command summary stalls the telnet reader and
+        # the worker thread never returns). It is only meant to wipe any default
+        # config off the freshly-booted mgmt interface, which is unnecessary
+        # here, so skip it on NE40E and configure the interface directly.
+        if self.vm_type != "NE40E":
             self.wait_write(cmd="clear configuration this", wait=None)
-            (idx, match, res) = self.tn.expect([rb"Error"], 1)
-            if match and idx == 0:
-                time.sleep(5)
-            else:
-                break
+            self.tn.read_until(b"Error", 3)
         self.wait_write(cmd="undo shutdown", wait=None)
         self.wait_write(cmd="ip binding vpn-instance __MGMT_VPN__", wait="]")
-        self.wait_write(cmd=f"ip address {self.mgmt_address_ipv4.replace('/', ' ')}", wait="]")
+        self.wait_write(
+            cmd=f"ip address {self.mgmt_address_ipv4.replace('/', ' ')}", wait="]"
+        )
+        if self.mgmt_address_ipv6 and self.mgmt_address_ipv6 != "dhcp":
+            self.wait_write(cmd="ipv6 enable", wait="]")
+            self.wait_write(
+                cmd=f"ipv6 address {self.mgmt_address_ipv6.replace('/', ' ')}", wait="]"
+            )
         self.wait_write(cmd="quit", wait="]")
         self.wait_write(
-            cmd=f"ip route-static vpn-instance __MGMT_VPN__ 0.0.0.0 0 {self.mgmt_gw_ipv4}", wait="]"
+            cmd=f"ip route-static vpn-instance __MGMT_VPN__ 0.0.0.0 0 {self.mgmt_gw_ipv4}",
+            wait="]",
         )
+        if (
+            self.mgmt_address_ipv6
+            and self.mgmt_address_ipv6 != "dhcp"
+            and self.mgmt_gw_ipv6
+            and self.mgmt_gw_ipv6 != "dhcp"
+        ):
+            self.wait_write(
+                cmd=f"ipv6 route-static vpn-instance __MGMT_VPN__ :: 0 {self.mgmt_gw_ipv6}",
+                wait="]",
+            )
 
     def bootstrap_config(self):
         """Do the actual bootstrap config"""
 
-    # Example: conditional config
+        # Example: conditional config
         if getattr(self, "vm_version", None) == "V800R023C00":
             self.logger.info("Applying config for VRP version V800R023C00")
             # run R23 specific commands here
-            #self.wait_write(cmd="undo user-security-policy enable", wait="]")
-            #self.wait_write(cmd="undo dcn", wait="]")
+            # self.wait_write(cmd="undo user-security-policy enable", wait="]")
+            # self.wait_write(cmd="undo dcn", wait="]")
         if getattr(self, "vm_version", None) == "V800R011C00":
             self.logger.info("Applying config for VRP version V800R011C00")
             # run R11 specific commands here
-            #self.wait_write(cmd="undo user-security-policy enable", wait="]")
-            #self.wait_write(cmd="undo dcn", wait="]")
+            # self.wait_write(cmd="undo user-security-policy enable", wait="]")
+            # self.wait_write(cmd="undo dcn", wait="]")
 
-    # Default / generic config here
+        # Default / generic config here
         self.logger.info("Applying generic bootstrap config...")
         # ... rest of your existing bootstrap_config logic ...
-
 
         self.bootstrap_mgmt_interface()
         self.wait_write(cmd=f"sysname {self.hostname}", wait="]")
@@ -227,7 +283,10 @@ class VRP_vm(vrnetlab.VM):
             cmd=f"local-user {self.username} password irreversible-cipher {self.password}",
             wait="]",
         )
-        self.wait_write(cmd=f"local-user {self.username} service-type ssh terminal telnet ftp", wait="]")
+        self.wait_write(
+            cmd=f"local-user {self.username} service-type ssh terminal telnet ftp",
+            wait="]",
+        )
         self.wait_write(cmd=f"local-user {self.username} level 3", wait="]")
 
         self.wait_write(cmd=f"authentication-scheme default_admin", wait="]")
@@ -239,13 +298,13 @@ class VRP_vm(vrnetlab.VM):
         self.wait_write(cmd="quit", wait="]")
 
         # Commit is hanging in the bootstrap with version R23 for unknown reason so we rely on the auto-commit with mmi-mode
-        #self.wait_write(cmd="commit", wait="]")
+        # self.wait_write(cmd="commit", wait="]")
         time.sleep(5)
 
-        #self.wait_write(
+        # self.wait_write(
         #    cmd=f"local-user {self.username} user-group manage-ug", wait="]"
-        #)
-        #self.wait_write(cmd="quit", wait="]")
+        # )
+        # self.wait_write(cmd="quit", wait="]")
 
         # VTY configuration
         self.wait_write(cmd="user-interface vty 0 4", wait="]")
@@ -253,57 +312,77 @@ class VRP_vm(vrnetlab.VM):
         # We want all protocols to be allowed on the vty
         self.wait_write(cmd="protocol inbound all", wait="]")
         # We want only ssh to be allowed on the vty
-        #self.wait_write(cmd="protocol inbound ssh", wait="]")
+        # self.wait_write(cmd="protocol inbound ssh", wait="]")
         self.wait_write(cmd="quit", wait="]")
-        
+
         # Commit is hanging in the bootstrap with version R23 for unknown reason so we rely on the auto-commit with mmi-mode
-        #self.wait_write(cmd="commit", wait="]")
+        # self.wait_write(cmd="commit", wait="]")
         time.sleep(5)
 
         # Enable stelnet, sftp, scp, ssh
         self.wait_write(cmd="stelnet server enable", wait="]")
         self.wait_write(cmd="sftp ipv4 server enable", wait="]")
+        self.wait_write(cmd="sftp ipv6 server enable", wait="]")
         self.wait_write(cmd="scp server enable", wait="]")
         self.wait_write(cmd="ssh authentication-type default password", wait="]")
         self.wait_write(cmd="ssh server-source all-interface", wait="]")
+        self.wait_write(cmd="ssh ipv6 server-source all-interface", wait="]")
         self.wait_write(cmd="sftp server default-directory cfcard:/", wait="]")
 
         # Set some ciphers for compatibility
-        self.wait_write(cmd="ssh server cipher aes256_gcm aes128_gcm aes256_ctr aes192_ctr aes128_ctr aes256_cbc aes128_cbc 3des_cbc", wait="]")
-        self.wait_write(cmd="ssh server hmac sha2_512 sha2_256_96 sha2_256 sha1 sha1_96 md5 md5_96", wait="]")
-        self.wait_write(cmd="ssh server key-exchange dh_group_exchange_sha256 dh_group_exchange_sha1 dh_group14_sha1 dh_group1_sha1 ecdh_sha2_nistp256 ecdh_sha2_nistp384 ecdh_sha2_nistp521 sm2_kep dh_group16_sha512 curve25519_sha256", wait="]")
-        self.wait_write(cmd="ssh server publickey dsa ecc rsa rsa_sha2_256 rsa_sha2_512", wait="]")
+        self.wait_write(
+            cmd="ssh server cipher aes256_gcm aes128_gcm aes256_ctr aes192_ctr aes128_ctr aes256_cbc aes128_cbc 3des_cbc",
+            wait="]",
+        )
+        self.wait_write(
+            cmd="ssh server hmac sha2_512 sha2_256_96 sha2_256 sha1 sha1_96 md5 md5_96",
+            wait="]",
+        )
+        self.wait_write(
+            cmd="ssh server key-exchange dh_group_exchange_sha256 dh_group_exchange_sha1 dh_group14_sha1 dh_group1_sha1 ecdh_sha2_nistp256 ecdh_sha2_nistp384 ecdh_sha2_nistp521 sm2_kep dh_group16_sha512 curve25519_sha256",
+            wait="]",
+        )
+        self.wait_write(
+            cmd="ssh server publickey dsa ecc rsa rsa_sha2_256 rsa_sha2_512", wait="]"
+        )
         self.wait_write(cmd="ssh server dh-exchange min-len 1024", wait="]")
-        self.wait_write(cmd="ssh client publickey dsa ecc rsa rsa_sha2_256 rsa_sha2_512", wait="]")
-        self.wait_write(cmd="ssh client cipher aes256_gcm aes128_gcm aes256_ctr aes192_ctr aes128_ctr aes256_cbc aes128_cbc 3des_cbc", wait="]")
-        self.wait_write(cmd="ssh client hmac sha2_512 sha2_256_96 sha2_256 sha1 sha1_96 md5 md5_96", wait="]")
-        self.wait_write(cmd="ssh client key-exchange dh_group_exchange_sha256 dh_group_exchange_sha1 dh_group14_sha1 dh_group1_sha1 ecdh_sha2_nistp256 ecdh_sha2_nistp384 ecdh_sha2_nistp521 sm2_kep dh_group16_sha512 curve25519_sha256", wait="]")
-
+        self.wait_write(
+            cmd="ssh client publickey dsa ecc rsa rsa_sha2_256 rsa_sha2_512", wait="]"
+        )
+        self.wait_write(
+            cmd="ssh client cipher aes256_gcm aes128_gcm aes256_ctr aes192_ctr aes128_ctr aes256_cbc aes128_cbc 3des_cbc",
+            wait="]",
+        )
+        self.wait_write(
+            cmd="ssh client hmac sha2_512 sha2_256_96 sha2_256 sha1 sha1_96 md5 md5_96",
+            wait="]",
+        )
+        self.wait_write(
+            cmd="ssh client key-exchange dh_group_exchange_sha256 dh_group_exchange_sha1 dh_group14_sha1 dh_group1_sha1 ecdh_sha2_nistp256 ecdh_sha2_nistp384 ecdh_sha2_nistp521 sm2_kep dh_group16_sha512 curve25519_sha256",
+            wait="]",
+        )
 
         # NETCONF seems to crash the virtual R23 router so do not configure it
-        #self.wait_write(cmd="snetconf server enable", wait="]")
-        #self.wait_write(cmd="netconf", wait="]")
-        #self.wait_write(cmd="protocol inbound ssh port 830", wait="]")
-        #self.wait_write(cmd="quit", wait="]")
+        # self.wait_write(cmd="snetconf server enable", wait="]")
+        # self.wait_write(cmd="netconf", wait="]")
+        # self.wait_write(cmd="protocol inbound ssh port 830", wait="]")
+        # self.wait_write(cmd="quit", wait="]")
 
         time.sleep(5)
         # We will only do a final quit here and with mmi-mode enable all changes will be commited automatically
         self.wait_write(cmd="quit", wait="]")
         # if we do not commit we will not see the ">", with mmi-mode enable the system automatically commits when leaving system-view
-        #self.wait_write(cmd="save", wait=">")
+        # self.wait_write(cmd="save", wait=">")
         # Under heavy load commit might take some seconds. Better give some more time to wait for commit to complete.
         time.sleep(15)
-        #self.wait_write(cmd="undo mmi-mode enable", wait=">")
-
+        # self.wait_write(cmd="undo mmi-mode enable", wait=">")
 
     def startup_config(self):
         if not os.path.exists(STARTUP_CONFIG_FILE):
             self.logger.trace(f"Startup config file {STARTUP_CONFIG_FILE} not found")
             return
-        
 
         vrnetlab.run_command(["cp", STARTUP_CONFIG_FILE, "/tftpboot/containerlab.cfg"])
-
 
         if self.vm_type == "CE12800":
             with open(STARTUP_CONFIG_FILE, "r+") as file:
@@ -323,14 +402,15 @@ class VRP_vm(vrnetlab.VM):
                     file.write(cfg)
                     file.truncate()
 
-
         self.bootstrap_mgmt_interface()
-        #self.wait_write(cmd="commit", wait="]")
-
+        # self.wait_write(cmd="commit", wait="]")
 
         self.wait_write(cmd=f"return", wait="]")
         time.sleep(1)
-        self.wait_write(cmd=f"tftp 10.0.0.2 vpn-instance __MGMT_VPN__ get containerlab.cfg", wait=">")
+        self.wait_write(
+            cmd=f"tftp 10.0.0.2 vpn-instance __MGMT_VPN__ get containerlab.cfg",
+            wait=">",
+        )
         self.wait_write(cmd="startup saved-configuration containerlab.cfg", wait=">")
         self.wait_write(cmd="reboot fast", wait=">")
         self.wait_write(cmd="reboot", wait="#")

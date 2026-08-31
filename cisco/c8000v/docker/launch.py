@@ -53,9 +53,7 @@ class C8000v_vm(vrnetlab.VM):
             logger.info("License found")
             self.license = True
 
-        super().__init__(
-            username, password, disk_image=disk_image, ram=4096, use_scrapli=True
-        )
+        super().__init__(username, password, disk_image=disk_image, ram=4096)
         self.install_mode = install_mode
         self.hostname = hostname
         self.conn_mode = conn_mode
@@ -130,6 +128,9 @@ do reload
         """
 
         v4_mgmt_address = vrnetlab.cidr_to_ddn(self.mgmt_address_ipv4)
+        ipv6_address = self.render_optional_mgmt_config(
+            "ipv6 address {address}", address=self.mgmt_address_ipv6
+        )
         is_autonomous = self.mode != "controller"
 
         # Controller mode uses VRF 513, autonomous mode uses clab-mgmt
@@ -141,6 +142,12 @@ do reload
         else:
             vrf_name = "clab-mgmt"
             vrf_description = "Containerlab management VRF (DO NOT DELETE)"
+
+        ipv6_route = self.render_optional_mgmt_config(
+            "ipv6 route vrf {vrf} ::/0 {gateway}",
+            vrf=vrf_name,
+            gateway=self.mgmt_gw_ipv6,
+        )
 
         # Build autonomous-specific config sections
         crypto_key = "crypto key generate rsa modulus 2048\n!" if is_autonomous else "!"
@@ -170,13 +177,13 @@ exit
 exit
 !
 ip route vrf {vrf_name} 0.0.0.0 0.0.0.0 {self.mgmt_gw_ipv4}
-ipv6 route vrf {vrf_name} ::/0 {self.mgmt_gw_ipv6}
+{ipv6_route}
 !
 interface GigabitEthernet 1
 description Containerlab management interface
 vrf forwarding {vrf_name}
 ip address {v4_mgmt_address[0]} {v4_mgmt_address[1]}
-ipv6 address {self.mgmt_address_ipv6}
+{ipv6_address}
 no shut
 exit
 !

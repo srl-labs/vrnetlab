@@ -279,7 +279,10 @@ class OpenWRT_vm(vrnetlab.VM):
                 f"uci set network.mgmt.netmask='{ipaddress.IPv4Interface(self.mgmt_address_ipv4).netmask}'\n".encode()
             )
             time.sleep(0.5)
-            if self.mgmt_passthrough_ipv4_address == self.mgmt_address_ipv4:
+            if (
+                self.mgmt_passthrough_ipv4_address == self.mgmt_address_ipv4
+                and self.mgmt_address_ipv6
+            ):
                 # MGMT passthrough active, lets enable IPv6 aswell
                 self.tn.write(
                     f"uci set network.mgmt.ip6addr='{self.mgmt_address_ipv6}'\n".encode(
@@ -315,8 +318,11 @@ class OpenWRT_vm(vrnetlab.VM):
                     f"✅ MGMT IP is already correct: {current_mgmt_address_ipv4}"
                 )
             else:
-                if self.mgmt_passthrough_ipv4_address != self.mgmt_address_ipv4:
-                    # MGMT passthrough active, lets disable IPv6
+                if (
+                    self.mgmt_passthrough_ipv4_address != self.mgmt_address_ipv4
+                    or not self.mgmt_address_ipv6
+                ):
+                    # Disable IPv6 when passthrough is inactive or has no IPv6 address
                     self.tn.write(b"uci del network.mgmt.ip6addr\n")
                     time.sleep(0.5)
                 self.logger.warning(
@@ -330,7 +336,10 @@ class OpenWRT_vm(vrnetlab.VM):
                     )
                 )
                 time.sleep(0.5)
-                if self.mgmt_passthrough_ipv4_address == self.mgmt_address_ipv4:
+                if (
+                    self.mgmt_passthrough_ipv4_address == self.mgmt_address_ipv4
+                    and self.mgmt_address_ipv6
+                ):
                     # MGMT passthrough active, lets enable IPv6 aswell
                     self.tn.write(
                         f"uci set network.mgmt.ip6addr='{self.mgmt_address_ipv6}'\n".encode(

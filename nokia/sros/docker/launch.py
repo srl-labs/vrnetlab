@@ -914,7 +914,6 @@ class SROS_vm(vrnetlab.VM):
             ram=ram,
             driveif="virtio",
             smp=f"{cpu}",
-            use_scrapli=True,
         )
 
         self.nic_type = "virtio-net-pci"
@@ -1252,7 +1251,9 @@ class SROS_vm(vrnetlab.VM):
         # thus it must be applied unconditionally
 
         # init scrapli sros driver
-        scrapli_timeout = vrnetlab.getenv_uint("SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT)
+        scrapli_timeout = vrnetlab.getenv_uint(
+            "SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT
+        )
         self.logger.info(
             f"Scrapli timeout is {scrapli_timeout}s (default {vrnetlab.DEFAULT_SCRAPLI_TIMEOUT}s)"
         )
@@ -1278,7 +1279,12 @@ class SROS_vm(vrnetlab.VM):
         # SROS <= 22 use classic configuration mode by defaults
         # other functions rely on this variable to determine what cmds to send
         global classic_cfg
-        classic_cfg = True if (SROS_VERSION.major <= 22 and SROS_VERSION.major > 0) or SROS_VERSION.magc else False
+        classic_cfg = (
+            True
+            if (SROS_VERSION.major <= 22 and SROS_VERSION.major > 0)
+            or SROS_VERSION.magc
+            else False
+        )
 
         if config_exists:
             with open("/tftpboot/config.txt") as startup_cfg:
@@ -1337,23 +1343,6 @@ class SROS_vm(vrnetlab.VM):
         # close scrapli device driver
         self.sros_con.close()
 
-    @property
-    def ram(self):
-        """Ignore environment variables here, since getMem function is used"""
-        return self._ram
-
-    @property
-    def cpu(self):
-        """Ignore environment variables here, since CPU environment variable is used for number of cpus in getCPU function"""
-
-        return str(self._cpu)
-
-    @property
-    def smp(self):
-        """Ignore environment variables here, since CPU environment variable is used for number of cpus in getCPU function"""
-
-        return str(self._smp)
-
 
 class SROS_integrated(SROS_vm):
     """Integrated VSR-SIM"""
@@ -1377,9 +1366,12 @@ class SROS_integrated(SROS_vm):
         self.num_nics = num_nics
 
         if self.mgmt_passthrough:
+            ipv6_address = self.render_optional_mgmt_config(
+                "address={address}@active ", address=self.mgmt_address_ipv6
+            )
             self.smbios = [
                 f"type=1,product=TIMOS:address={self.mgmt_address_ipv4}@active "
-                f"address={self.mgmt_address_ipv6}@active "
+                f"{ipv6_address}"
                 f"license-file=tftp://{self.mgmt_gw_ipv4}/"
                 f"license.txt primary-config=tftp://{self.mgmt_gw_ipv4}/config.txt "
                 f"{'' if 'system-base-mac=' in variant['timos_line'] else f'system-base-mac={vrnetlab.gen_mac(0)} '} {variant['timos_line']}"
@@ -1469,9 +1461,12 @@ class SROS_cp(SROS_vm):
         self.hostname = hostname
         self.variant = variant
         if self.mgmt_passthrough:
+            ipv6_address = self.render_optional_mgmt_config(
+                "address={address}@active ", address=self.mgmt_address_ipv6
+            )
             self.smbios = [
                 f"type=1,product=TIMOS:address={self.mgmt_address_ipv4}@active "
-                f"address={self.mgmt_address_ipv6}@active "
+                f"{ipv6_address}"
                 f"license-file=tftp://{self.mgmt_gw_ipv4}/"
                 f"license.txt primary-config=tftp://{self.mgmt_gw_ipv4}/config.txt "
                 f"{'' if 'system-base-mac=' in variant['cp']['timos_line'] else f'system-base-mac={vrnetlab.gen_mac(0)} '} {variant['cp']['timos_line']}"

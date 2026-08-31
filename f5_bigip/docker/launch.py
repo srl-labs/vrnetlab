@@ -8,7 +8,6 @@ import os
 import signal
 import subprocess
 import sys
-import telnetlib
 import tempfile
 import textwrap
 import time

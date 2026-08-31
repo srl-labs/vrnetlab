@@ -25,7 +25,7 @@ endif
 
 docker-clean-build:
 	@echo "--> Cleaning docker build context"
-	-rm -f docker/*.qcow2* docker/*.tgz* docker/*.vmdk* docker/*.iso docker/*.xml docker/*.bin
+	-rm -f docker/*.qcow2* docker/*.tgz* docker/*.vmdk* docker/*.vdi* docker/*.iso docker/*.xml docker/*.bin
 	-rm -f docker/healthcheck.py docker/vrnetlab.py
 
 docker-pre-build: ;

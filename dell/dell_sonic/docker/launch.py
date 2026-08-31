@@ -48,9 +48,8 @@ class Dell_Sonic_VM(vrnetlab.VM):
                 disk_image = "/" + e
                 break
         super(Dell_Sonic_VM, self).__init__(
-            username, password, disk_image=disk_image, ram=4096
+            username, password, disk_image=disk_image, ram=4096, smp="2"
         )
-        self.qemu_args.extend(["-smp", "2"])
         self.nic_type = "virtio-net-pci"
         self.conn_mode = conn_mode
         self.num_nics = 10
@@ -109,10 +108,11 @@ class Dell_Sonic_VM(vrnetlab.VM):
             self.wait_write(
                 f"sudo /usr/sbin/ip address add {self.mgmt_address_ipv4} dev eth0", "#"
             )
-        if not self.mgmt_address_ipv4 == "dhcp":
+        if self.mgmt_address_ipv6 and self.mgmt_address_ipv6 != "dhcp":
             # note, v6 address is not being applied for whatever reason
             self.wait_write(
-                f"sudo /usr/sbin/ip -6 address add {self.mgmt_address_ipv6} dev eth0", "#"
+                f"sudo /usr/sbin/ip -6 address add {self.mgmt_address_ipv6} dev eth0",
+                "#",
             )
         self.wait_write("passwd -q %s" % (self.username))
         self.wait_write(self.password, "New password:")

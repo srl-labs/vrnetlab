@@ -73,7 +73,6 @@ class VIOS_vm(vrnetlab.VM):
             smp="1",
             ram=ram,
             driveif="virtio",
-            use_scrapli=True,
         )
 
         self.hostname = hostname

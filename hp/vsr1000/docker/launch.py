@@ -6,7 +6,6 @@ import os
 import re
 import signal
 import sys
-import telnetlib
 import time
 
 import vrnetlab
@@ -88,7 +87,6 @@ quit
                 self.logger.debug("Done writing to QEMU Monitor")
                 self.logger.debug("Switching to line aux0")
 
-                self.tn = telnetlib.Telnet("127.0.0.1", 5000 + self.num)
 
                 # run main config!
                 self.bootstrap_config()

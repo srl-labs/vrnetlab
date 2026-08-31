@@ -1,0 +1,13 @@
+[Unit]
+Description=XRd vRouter guest init (bind NICs + launch XRd container)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/guest-init.sh
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

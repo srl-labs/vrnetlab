@@ -54,7 +54,6 @@ class cat9kv_vm(vrnetlab.VM):
             smp=f"cores={vcpu},threads=1,sockets=1",
             ram=ram,
             min_dp_nics=8,
-            use_scrapli=True,
         )
         self.hostname = hostname
         self.conn_mode = conn_mode
@@ -88,24 +87,35 @@ class cat9kv_vm(vrnetlab.VM):
                 with open("/vswitch.xml", "r") as f:
                     vswitch_content = f.read()
 
-                random_serial = ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
+                random_serial = "".join(
+                    random.choices(string.ascii_uppercase + string.digits, k=7)
+                )
 
                 vswitch_content = re.sub(
-                    r'<prod_serial_number>.*?</prod_serial_number>',
-                    f'<prod_serial_number>{random_serial}</prod_serial_number>',
-                    vswitch_content
-                    )
+                    r"<prod_serial_number>.*?</prod_serial_number>",
+                    f"<prod_serial_number>{random_serial}</prod_serial_number>",
+                    vswitch_content,
+                )
 
                 with open("/img_dir/conf/vswitch.xml", "w") as f:
                     f.write(vswitch_content)
 
-                self.logger.info(f"Generated vswitch.xml with randomized serial number: {random_serial}")
+                self.logger.info(
+                    f"Generated vswitch.xml with randomized serial number: {random_serial}"
+                )
             else:
                 self.logger.debug("No vswitch.xml file provided.")
         except Exception as e:
             self.logger.error(f"Error processing vswitch.xml: {e}")
 
         v4_mgmt_address = vrnetlab.cidr_to_ddn(self.mgmt_address_ipv4)
+        ipv6_route = self.render_optional_mgmt_config(
+            "ipv6 route vrf Mgmt-vrf ::/0 {gateway}",
+            gateway=self.mgmt_gw_ipv6,
+        )
+        ipv6_address = self.render_optional_mgmt_config(
+            "ipv6 address {address}", address=self.mgmt_address_ipv6
+        )
 
         cat9kv_config = f"""hostname {self.hostname}
 username {self.username} privilege 15 password {self.password}
@@ -123,12 +133,12 @@ login local
 transport input all
 !
 ip route vrf Mgmt-vrf 0.0.0.0 0.0.0.0 {self.mgmt_gw_ipv4}
-ipv6 route vrf Mgmt-vrf ::/0 {self.mgmt_gw_ipv6}
+{ipv6_route}
 !
 interface GigabitEthernet0/0
 description Containerlab management interface
 ip address {v4_mgmt_address[0]} {v4_mgmt_address[1]}
-ipv6 address {self.mgmt_address_ipv6}
+{ipv6_address}
 no shut
 exit
 !

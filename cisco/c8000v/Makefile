@@ -20,7 +20,7 @@ docker-build: docker-build-common
 	@if [ "$(MODE)" = "autonomous" ]; then \
 		echo "Running install step for autonomous mode..."; \
 		docker run --cidfile cidfile --privileged $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION) --trace --install; \
-		docker commit --change='ENTRYPOINT ["/launch.py"]' $$(cat cidfile) $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION); \
+		docker commit --change='ENTRYPOINT ["uv", "run", "/launch.py"]' $$(cat cidfile) $(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME):$(VERSION); \
 		docker rm -f $$(cat cidfile); \
 		rm -f cidfile; \
 	else \

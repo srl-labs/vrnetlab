@@ -45,7 +45,7 @@ class XRV_vm(vrnetlab.VM):
             if re.search(".vmdk", e):
                 disk_image = "/" + e
         super(XRV_vm, self).__init__(
-            username, password, disk_image=disk_image, ram=3072, use_scrapli=True
+            username, password, disk_image=disk_image, ram=3072
         )
         self.hostname = hostname
         self.conn_mode = conn_mode
@@ -121,7 +121,9 @@ class XRV_vm(vrnetlab.VM):
         return
 
     def apply_config(self):
-        scrapli_timeout = vrnetlab.getenv_uint("SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT)
+        scrapli_timeout = vrnetlab.getenv_uint(
+            "SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT
+        )
         self.logger.info(
             f"Scrapli timeout is {scrapli_timeout}s (default {vrnetlab.DEFAULT_SCRAPLI_TIMEOUT}s)"
         )
@@ -136,6 +138,13 @@ class XRV_vm(vrnetlab.VM):
             "timeout_ops": scrapli_timeout,
         }
 
+        ipv6_route = self.render_optional_mgmt_config(
+            "::/0 {gateway}", gateway=self.mgmt_gw_ipv6
+        )
+        ipv6_address = self.render_optional_mgmt_config(
+            "ipv6 address {address}", address=self.mgmt_address_ipv6
+        )
+
         xrv_config = f"""hostname {self.hostname}
 vrf clab-mgmt
 description Containerlab management VRF (DO NOT DELETE)
@@ -149,14 +158,14 @@ vrf clab-mgmt
 address-family ipv4 unicast
 0.0.0.0/0 {self.mgmt_gw_ipv4}
 address-family ipv6 unicast
-::/0 {self.mgmt_gw_ipv6}
+{ipv6_route}
 root
 !
 interface MgmtEth 0/0/CPU0/0
 description Containerlab management interface
 vrf clab-mgmt
 ipv4 address {self.mgmt_address_ipv4}
-ipv6 address {self.mgmt_address_ipv6}
+{ipv6_address}
 no shut
 exit
 !

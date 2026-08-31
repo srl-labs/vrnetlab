@@ -1,0 +1,13 @@
+## Management NIC = the virtio-net device the vrnetlab framework attaches.
+## XR owns the management IP (configured explicitly on MgmtEth), so here we only
+## bring the link up with no address — it is purely the L2 carrier to the clab
+## management network. Matched by driver so the kernel name doesn't matter.
+network:
+  version: 2
+  ethernets:
+    mgmt:
+      match:
+        driver: virtio_net
+      dhcp4: false
+      dhcp6: false
+      optional: true

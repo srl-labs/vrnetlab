@@ -62,16 +62,31 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
         # create SHA-512 hash of the password
         password_hash = sha512_crypt.hash("admin@123")
 
-        # read init.conf configuration file to replace hostname placehodler
+        # read init.conf configuration file to replace hostname placeholder
         # with given hostname
         with open("init.conf", "r") as file:
             cfg = file.read()
 
-        cfg = cfg.replace("{MGMT_IP_IPV4}", self.mgmt_address_ipv4)
-        cfg = cfg.replace("{MGMT_GW_IPV4}", self.mgmt_gw_ipv4)
-        cfg = cfg.replace("{MGMT_IP_IPV6}", self.mgmt_address_ipv6)
-        cfg = cfg.replace("{MGMT_GW_IPV6}", self.mgmt_gw_ipv6)
-        cfg = cfg.replace("{HOSTNAME}", self.hostname)
+        ipv6_address_config = self.render_optional_mgmt_config(
+            "family inet6 {\n                address {address};\n            }",
+            address=self.mgmt_address_ipv6,
+        )
+        ipv6_route_config = self.render_optional_mgmt_config(
+            "rib mgmt_junos.inet6.0 {\n"
+            "                static {\n"
+            "                    route ::/0 next-hop {gateway};\n"
+            "                }\n"
+            "            }",
+            address=self.mgmt_address_ipv6,
+            gateway=self.mgmt_gw_ipv6,
+        )
+        cfg = (
+            cfg.replace("{MGMT_IP_IPV4}", self.mgmt_address_ipv4)
+            .replace("{MGMT_GW_IPV4}", self.mgmt_gw_ipv4)
+            .replace("{MGMT_IPV6_ADDRESS_CONFIG}", ipv6_address_config)
+            .replace("{MGMT_IPV6_ROUTE_CONFIG}", ipv6_route_config)
+            .replace("{HOSTNAME}", self.hostname)
+        )
         # replace CRYPT_PSWD file var with nodes given password
         # (Evo does not accept plaintext passwords in config)
         cfg = cfg.replace("{CRYPT_PSWD}", password_hash)
@@ -121,12 +136,14 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
         try:
             parsed_junos_version = float(junos_version)
         except ValueError as e:
-             self.logger.error(f"Could not parse Junos version from filename {disk_image}! Expecting '12.3R4' style versioning to be present: {e}")
+            self.logger.error(
+                f"Could not parse Junos version from filename {disk_image}! Expecting '12.3R4' style versioning to be present: {e}"
+            )
 
         if parsed_junos_version is not None and parsed_junos_version >= 24.2:
             # vJunosEvolved 24.2R1 and up require UEFI
-            self.qemu_args.extend(["-bios", "/usr/share/qemu/OVMF.fd"])           
-        
+            self.qemu_args.extend(["-bios", "/usr/share/qemu/OVMF.fd"])
+
         self.conn_mode = conn_mode
 
     def startup_config(self):
@@ -168,9 +185,10 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
                 # Login
                 self.wait_write("\r", None)
 
-                _, loginMatch, _ = self.tn.expect([f"{self.hostname} login:".encode("utf-8")])
+                _, loginMatch, _ = self.tn.expect(
+                    [f"{self.hostname} login:".encode("utf-8")]
+                )
                 if loginMatch:
-
                     self.logger.info("Login prompt found")
 
                     # close telnet connection
@@ -185,7 +203,7 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
         # no match, if we saw some output from the router it's probably
         # booting, so let's give it some more time
         if res != b"":
-            self.logger.trace("OUTPUT: %s" % res.decode('utf-8', errors="ignore"))
+            self.logger.trace("OUTPUT: %s" % res.decode("utf-8", errors="ignore"))
             # reset spins if we saw some output
             self.spins = 0
 

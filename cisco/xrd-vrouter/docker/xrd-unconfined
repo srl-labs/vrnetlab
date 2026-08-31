@@ -1,0 +1,16 @@
+#include <tunables/global>
+
+profile xrd-unconfined flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base> # For common system resources.
+  capability,
+  dbus,
+  file,
+  mount,
+  network,
+  pivot_root,
+  ptrace,
+  signal,
+  umount,
+  unix,
+  remount,
+}

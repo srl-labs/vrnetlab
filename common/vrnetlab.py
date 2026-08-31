@@ -11,16 +11,11 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
-import telnetlib
 import tempfile
 import time
 from pathlib import Path
 
-try:
-    from scrapli import Driver
-except ImportError:
-    pass
+from scrapli import Driver
 
 MAX_RETRIES = 60
 
@@ -83,9 +78,83 @@ def boot_delay():
         time.sleep(int(delay))
 
 
+class _Console:
+    """telnetlib-compatible wrapper around a scrapli channel (qemu serial console / monitor)."""
+
+    def __init__(self, driver):
+        self._driver = driver
+
+    def open(self):
+        self._driver.open()
+
+    def close(self):
+        self._driver.close()
+
+    def write(self, data):
+        if isinstance(data, bytes):
+            data = data.decode(errors="ignore")
+        self._driver.channel.write(data)
+
+    def _read(self):
+        data = self._driver.channel.read()
+        if data:
+            # mirror console output to stdout so it shows up in docker logs
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+        return data
+
+    def read_very_eager(self):
+        """Return whatever bytes are currently available (telnetlib-compatible)."""
+        return self._read()
+
+    def read_until(self, expected, timeout=None):
+        """Read until the literal expected bytes are seen, or timeout (telnetlib-compatible)."""
+        if isinstance(expected, str):
+            expected = expected.encode()
+        buf = b""
+        t_end = time.time() + timeout if timeout else None
+        while expected not in buf:
+            data = self._read()
+            buf += data
+            if not data:
+                time.sleep(0.1)
+            if t_end and time.time() > t_end:
+                break
+        return buf
+
+    def expect(self, regex_list, timeout=None):
+        """Regex-match byte patterns against the stream (telnetlib.expect-compatible).
+
+        Returns (index, match, buffer), or (-1, None, buffer) on timeout.
+        """
+        buf = b""
+        t_end = time.time() + timeout if timeout else None
+        while True:
+            data = self._read()
+            buf += data
+            if not data:
+                time.sleep(0.1)
+            for i, pat in enumerate(regex_list):
+                match = re.search(pat.decode(), buf.decode(errors="ignore"))
+                if match:
+                    return i, match, buf
+            if t_end and time.time() > t_end:
+                return -1, None, buf
+
+
 class VM:
     def __str__(self):
         return self.__class__.__name__
+
+    def render_optional_mgmt_config(self, template, **values):
+        """Render static management config only when all values are available."""
+        if not all(value and value != "dhcp" for value in values.values()):
+            return ""
+
+        for name, value in values.items():
+            template = template.replace(f"{{{name}}}", str(value))
+
+        return template
 
     def _overlay_disk_image_format(self) -> str:
         res = run_command(["qemu-img", "info", "--output", "json", self.image])
@@ -110,11 +179,9 @@ class VM:
         mgmt_intf="eth0",
         mgmt_dhcp=False,
         min_dp_nics=0,
-        use_scrapli=False,
         data_intf_prefix="eth",
         arch="x86_64",
     ):
-        self.use_scrapli = use_scrapli
         self.arch = arch
 
         # configure logging
@@ -126,41 +193,46 @@ class VM:
         will write all channel i/o as DEBUG log level.
         """
         self.scrapli_logger = logging.getLogger("scrapli")
-        
-        scrapli_log_level = logging.DEBUG if os.getenv("DEBUG_SCRAPLI", "false").lower() == "true" else logging.INFO
+
+        scrapli_log_level = (
+            logging.DEBUG
+            if os.getenv("DEBUG_SCRAPLI", "false").lower() == "true"
+            else logging.INFO
+        )
         self.scrapli_logger.setLevel(scrapli_log_level)
-        
-        
 
-        # configure scrapli
-        if self.use_scrapli:
-            # init scrapli_tn -- main telnet device
-            scrapli_tn_dev = {
-                "host": "127.0.0.1",
-                "port": 5000 + num,
-                "auth_bypass": True,
-                "auth_strict_key": False,
-                "transport": "telnet",
-                "timeout_socket": 3600,
-                "timeout_transport": 3600,
-                "timeout_ops": 3600,
-            }
+        # init scrapli_tn -- main telnet device
+        scrapli_tn_dev = {
+            "host": "127.0.0.1",
+            "port": 5000 + num,
+            "auth_bypass": True,
+            "auth_strict_key": False,
+            "transport": "telnet",
+            "timeout_socket": 3600,
+            "timeout_transport": 3600,
+            "timeout_ops": 3600,
+        }
 
-            self.scrapli_tn = Driver(**scrapli_tn_dev)
+        self.scrapli_tn = Driver(**scrapli_tn_dev)
 
-            # init scrapli_qm_dev -- qemu monitor device
-            scrapli_qm_dev = {
-                "host": "127.0.0.1",
-                "port": 4000 + num,
-                "auth_bypass": True,
-                "auth_strict_key": False,
-                "transport": "telnet",
-                "timeout_socket": 3600,
-                "timeout_transport": 3600,
-                "timeout_ops": 3600,
-            }
+        # init scrapli_qm_dev -- qemu monitor device
+        scrapli_qm_dev = {
+            "host": "127.0.0.1",
+            "port": 4000 + num,
+            "auth_bypass": True,
+            "auth_strict_key": False,
+            "transport": "telnet",
+            "timeout_socket": 3600,
+            "timeout_transport": 3600,
+            "timeout_ops": 3600,
+        }
 
-            self.scrapli_qm = Driver(**scrapli_qm_dev)
+        self.scrapli_qm = Driver(**scrapli_qm_dev)
+
+        # telnetlib-compatible facades the launchers use: self.tn drives the
+        # serial console, self.qm the qemu monitor.
+        self.tn = _Console(self.scrapli_tn)
+        self.qm = _Console(self.scrapli_qm)
 
         # username / password to configure
         self.username = username
@@ -172,7 +244,6 @@ class VM:
         self.running = False
         self.spins = 0
         self.p = None
-        self.tn = None
 
         self._ram = ram
         self._cpu = cpu
@@ -266,7 +337,9 @@ class VM:
         snapshot_disk = f"/snapshot-data/vm{self.num}/disk.qcow2"
         snapshot_state = f"/snapshot-data/vm{self.num}/state.img"
         snapshot_metadata = f"/snapshot-data/vm{self.num}/metadata.json"
-        restoring_snapshot = os.path.exists(snapshot_disk) and os.path.exists(snapshot_state)
+        restoring_snapshot = os.path.exists(snapshot_disk) and os.path.exists(
+            snapshot_state
+        )
 
         # Load snapshot metadata if restoring
         self.snapshot_metadata = None
@@ -274,7 +347,7 @@ class VM:
             self.logger.info(f"Restoring from snapshot")
             self.logger.info(f"Snapshot disk: {snapshot_disk}")
             self.logger.info(f"Snapshot state: {snapshot_state}")
-            
+
             if os.path.exists(snapshot_metadata):
                 with open(snapshot_metadata, "r") as f:
                     self.snapshot_metadata = json.load(f)
@@ -284,8 +357,10 @@ class VM:
                 if "secondary_disks" in self.snapshot_metadata:
                     for disk in self.snapshot_metadata["secondary_disks"]:
                         self.logger.info(f"Restoring secondary disk: {disk}")
-                        shutil.copy2(os.path.join(f"/snapshot-data/vm{self.num}", disk), disk)
-            
+                        shutil.copy2(
+                            os.path.join(f"/snapshot-data/vm{self.num}", disk), disk
+                        )
+
             overlay_disk_image = f"/snapshot-data/vm{self.num}/disk-overlay.qcow2"
             base_disk = snapshot_disk
             base_format = "qcow2"
@@ -314,7 +389,11 @@ class VM:
                 ]
             )
 
-        machine = "pc" if self.arch == "x86_64" else "virt,virtualization=on -accel tcg,tb-size=128"
+        machine = (
+            "pc"
+            if self.arch == "x86_64"
+            else "virt,virtualization=on -accel tcg,tb-size=128"
+        )
 
         # Build qemu args
         self.qemu_args = [
@@ -340,7 +419,7 @@ class VM:
 
         # If restoring from snapshot, add -incoming parameter
         if restoring_snapshot:
-            self.qemu_args.extend(["-incoming", f"exec:cat\\ \\<\\ {snapshot_state}"])
+            self.qemu_args.extend(["-incoming", "defer"])
 
         # add additional qemu args if they were provided
         if self.qemu_additional_args:
@@ -365,11 +444,7 @@ class VM:
         mgmt_passthrough_coloured = format_bool_color(
             self.mgmt_passthrough, "Enabled", "Disabled"
         )
-        use_scrapli_coloured = format_bool_color(
-            self.use_scrapli, "Enabled", "Disabled"
-        )
 
-        self.logger.info(f"Scrapli: {use_scrapli_coloured}")
         self.logger.info(f"Transparent mgmt interface: {mgmt_passthrough_coloured}")
 
         self.start_time = datetime.datetime.now()
@@ -424,10 +499,11 @@ class VM:
 
         for i in range(1, MAX_RETRIES + 1):
             try:
-                if self.use_scrapli:
-                    self.scrapli_qm.open()
-                else:
-                    self.qm = telnetlib.Telnet("127.0.0.1", 4000 + self.num)
+                try:
+                    self.scrapli_qm.close()
+                except Exception:
+                    pass
+                self.scrapli_qm.open()
                 break
             except:
                 self.logger.error(
@@ -445,13 +521,11 @@ class VM:
 
         for i in range(1, MAX_RETRIES + 1):
             try:
-                if self.use_scrapli:
-                    self.scrapli_tn.open()
-                else:
-                    self.tn = telnetlib.Telnet("127.0.0.1", 5000 + self.num)
-                    # This enables super verbose telnetlib debugging
-                    # if self.logger.isEnabledFor(logging.DEBUG):
-                    #     self.tn.set_debuglevel(2)
+                try:
+                    self.scrapli_tn.close()
+                except Exception:
+                    pass
+                self.scrapli_tn.open()
                 break
             except:
                 self.logger.error(
@@ -467,22 +541,26 @@ class VM:
                     )
                 )
 
-        # If we restored from snapshot, resume the VM (it's paused after migration)
+        # If we restored from snapshot, pull the saved state in and resume the VM.
         snapshot_state = f"/snapshot-data/vm{self.num}/state.img"
         if os.path.exists(snapshot_state):
+            self.logger.info("Restoring VM state from snapshot")
+            threads = os.cpu_count() or 8
+            self._qemu_monitor_cmd("migrate_set_capability multifd on")
+            self._qemu_monitor_cmd("migrate_set_capability mapped-ram on")
+            self._qemu_monitor_cmd(f"migrate_set_parameter multifd-channels {threads}")
+
+            self._qemu_monitor_cmd(f'migrate_incoming "file:{snapshot_state}"')
             self.logger.info("Resuming VM after snapshot restore")
             self._qemu_monitor_cmd("cont")
-        
-        # Mark VM as running - snapshot restored a fully booted VM
+
+            # Mark VM as running
+            self.running = True
 
             # Close serial console connection to free it for external access
             try:
-                if self.use_scrapli:
-                    self.scrapli_tn.close()
-                    self.logger.info("Closed scrapli serial connection")
-                else:
-                    self.tn.close()
-                    self.logger.info("Closed telnet serial connection")
+                self.scrapli_tn.close()
+                self.logger.info("Closed scrapli serial connection")
             except Exception as e:
                 self.logger.warning(f"Could not close serial connection: {e}")
 
@@ -516,12 +594,62 @@ class VM:
         tc qdisc add dev $TAP_IF clsact
         tc filter add dev $TAP_IF ingress flower action mirred egress redirect dev {INTF_PREFIX}$INDEX
         """
-        
+
         ifup_script = ifup_script.replace("{INTF_PREFIX}", self.data_intf_prefix)
 
         with open("/etc/tc-tap-ifup", "w") as f:
             f.write(ifup_script)
         os.chmod("/etc/tc-tap-ifup", 0o777)
+
+    def create_macvtap(self, i):
+        """Create a passthru macvtap for data interface eth<i>.
+
+        Returns (mac, tapidx): the macvtap's MAC (the guest NIC must use it)
+        and its ifindex, which names the /dev/tap<ifindex> character device
+        qemu attaches to.
+
+        This backs the optional "macvtap" datapath: each data interface is
+        attached to the VM through a passthru macvtap. It is useful on host
+        kernels where the default tc-mirred egress redirect into the tap does
+        not deliver frames to the guest.
+        """
+        intf = f"{self.data_intf_prefix}{i}"
+        macvtap = f"macvtap{i}"
+        run_command(
+            [
+                "ip",
+                "link",
+                "add",
+                "link",
+                intf,
+                "name",
+                macvtap,
+                "type",
+                "macvtap",
+                "mode",
+                "passthru",
+            ]
+        )
+        with open(f"/sys/class/net/{intf}/mtu") as f:
+            mtu = f.readline().strip()
+        run_command(["ip", "link", "set", "dev", macvtap, "mtu", mtu])
+        run_command(["ip", "link", "set", "dev", macvtap, "up"])
+        # allmulticast + promisc so the guest receives reserved multicast
+        # (e.g. LACP), not just unicast/broadcast.
+        run_command(["ip", "link", "set", "dev", macvtap, "promisc", "on"])
+        run_command(["ip", "link", "set", "dev", macvtap, "allmulticast", "on"])
+        with open(f"/sys/class/net/{macvtap}/address") as f:
+            mac = f.readline().strip()
+        with open(f"/sys/class/net/{macvtap}/ifindex") as f:
+            tapidx = f.readline().strip()
+        # Some container runtimes have no devtmpfs, so /dev/tap<ifindex> may
+        # not exist. Create it so qemu opens the macvtap character device
+        # instead of the shell fd redirect creating a regular file.
+        with open(f"/sys/class/macvtap/tap{tapidx}/dev") as f:
+            major, minor = f.readline().strip().split(":")
+        run_command(["rm", "-f", f"/dev/tap{tapidx}"])
+        run_command(["mknod", f"/dev/tap{tapidx}", "c", major, minor])
+        return mac, tapidx
 
     def create_tc_tap_mgmt_ifup(self):
         """Create tap ifup script that is used in tc datapath mode, specifically for the management interface"""
@@ -531,7 +659,7 @@ class VM:
         ip link set tap0 mtu 65000
 
         # disable IPv6 to avoid sending periodic traffic like router solicitations from the vrnetlab container
-        ip -6 addr flush $TAP_IF
+        ip -6 addr flush tap0
 
         # create tc eth<->tap redirect rules
 
@@ -540,8 +668,11 @@ class VM:
         tc filter add dev {MGMT_INTF} ingress prio 1 protocol ip flower ip_proto tcp dst_port 5000-5007 action pass
         # mirror ARP traffic to container
         tc filter add dev {MGMT_INTF} ingress prio 2 protocol arp flower action mirred egress mirror dev tap0
-        # redirect rest of ingress traffic of eth0 to egress of tap0
-        tc filter add dev {MGMT_INTF} ingress prio 3 flower action mirred egress redirect dev tap0
+        # redirect rest of ingress traffic of eth0 to egress of tap0, recomputing
+        # L3/L4 checksums first: the host offloads checksums (CHECKSUM_PARTIAL), and
+        # the tc-mirred path to the VM would otherwise deliver packets with fake
+        # checksums that a checksum-strict NOSes silently drop.
+        tc filter add dev {MGMT_INTF} ingress prio 3 flower action csum ip and tcp and udp and icmp pipe action mirred egress redirect dev tap0
 
         tc qdisc add dev tap0 clsact
         # redirect all ingress traffic of tap0 to egress of eth0
@@ -549,6 +680,15 @@ class VM:
 
         # clone management MAC of the VM
         ip link set dev {MGMT_INTF} address {MGMT_MAC}
+
+        # The clab-assigned mgmt IP lives on the container eth0 *and* on the VM.
+        # The MAC clone above is meant to keep them indistinguishable, but some
+        # NOSes (e.g. Huawei VRP) assign their mgmt port a different MAC, so the
+        # container would shadow the VM in ARP (host resolves the v4 mgmt IP to
+        # eth0, not the VM). Make the container never answer ARP for the mgmt IP
+        # so only the VM does. (IPv6 already defers via duplicate-address detection.)
+        sysctl -qw net.ipv4.conf.{MGMT_INTF}.arp_ignore=8 || true
+        sysctl -qw net.ipv4.conf.{MGMT_INTF}.arp_announce=2 || true
         """
 
         ifup_script = ifup_script.replace("{MGMT_INTF}", self.mgmt_intf)
@@ -594,7 +734,11 @@ class VM:
         res.append("-device")
 
         # If restoring from snapshot, use the saved management MAC address
-        if self.snapshot_metadata and "mac_addresses" in self.snapshot_metadata and len(self.snapshot_metadata["mac_addresses"]) > 0:
+        if (
+            self.snapshot_metadata
+            and "mac_addresses" in self.snapshot_metadata
+            and len(self.snapshot_metadata["mac_addresses"]) > 0
+        ):
             self.mgmt_mac = self.snapshot_metadata["mac_addresses"][0]
             self.logger.info(f"Using saved management MAC: {self.mgmt_mac}")
         else:
@@ -673,7 +817,7 @@ class VM:
 
     def get_intf_mac(self, intf_name: str) -> str:
         """Get the MAC address of a container interface
-        
+
         Returns the MAC address of the specified interface, or None if not found.
         This is used to sync VM NIC MAC addresses with container interface MAC addresses
         for proper macvlan bridge mode operation.
@@ -685,11 +829,13 @@ class VM:
                 if command_json and len(command_json) > 0:
                     mac_address = command_json[0].get("address")
                     if mac_address:
-                        self.logger.debug(f"Found MAC address {mac_address} for interface {intf_name}")
+                        self.logger.debug(
+                            f"Found MAC address {mac_address} for interface {intf_name}"
+                        )
                         return mac_address
         except Exception as e:
             self.logger.debug(f"Could not get MAC address for {intf_name}: {e}")
-        
+
         return None
 
     def nic_provision_delay(self) -> None:
@@ -818,6 +964,31 @@ class VM:
                 )
                 continue
 
+            # macvtap passthru datapath (opt-in via CONNECTION_MODE=macvtap).
+            # The guest NIC uses the macvtap's MAC, and qemu attaches to the
+            # macvtap character device over the vhost fd path (a raw macvtap
+            # fd cannot answer TUNGETIFF). start() runs qemu through a shell,
+            # so the fds are opened with bash redirection.
+            if self.conn_mode == "macvtap":
+                mac, tapidx = self.create_macvtap(i)
+                res.append("-device")
+                res.append(
+                    f"{self.nic_type},netdev=p{i:02d},mac={mac}"
+                    + (
+                        f",bus=pci.{pci_bus},addr=0x{addr:x}"
+                        if self.provision_pci_bus
+                        else ""
+                    ),
+                )
+                fd = 100 + i
+                vhfd = 400 + i
+                res.append("-netdev")
+                res.append(
+                    f"tap,id=p{i:02d},fd={fd},vhost=on,vhostfd={vhfd} "
+                    f"{fd}<>/dev/tap{tapidx} {vhfd}<>/dev/vhost-net"
+                )
+                continue
+
             mac = None
             # If restoring from snapshot, use saved MAC addresses
             # MAC at index 0 is management, so data plane NICs start at index 1
@@ -832,7 +1003,9 @@ class VM:
                 intf_name = f"{self.data_intf_prefix}{i}"
                 mac = self.get_intf_mac(intf_name)
                 if mac:
-                    self.logger.info(f"Using container interface MAC {mac} for VM NIC {intf_name}")
+                    self.logger.info(
+                        f"Using container interface MAC {mac} for VM NIC {intf_name}"
+                    )
 
             # otherwise generate the mac
             if not mac:
@@ -887,16 +1060,19 @@ class VM:
         self.start()
 
     def wait_write(
-        self, cmd, wait="__defaultpattern__", con=None, clean_buffer=False, hold=""
+        self,
+        cmd,
+        wait="__defaultpattern__",
+        con=None,
+        clean_buffer=False,
+        hold="",
+        timeout=None,
     ):
         """Wait for something on the serial port and then send command
 
         Defaults to using self.tn as connection but this can be overridden
-        by passing a telnetlib.Telnet object in the con argument.
+        by passing self.qm (the qemu monitor) in the con argument.
         """
-
-        if self.use_scrapli:
-            return self.wait_write_scrapli(cmd, wait)
 
         con_name = "custom con"
         if con is None:
@@ -912,7 +1088,7 @@ class VM:
             if wait == "__defaultpattern__":
                 wait = self.wait_pattern
             self.logger.info(f"waiting for '{wait}' on {con_name}")
-            res = con.read_until(wait.encode())
+            res = con.read_until(wait.encode(), timeout)
 
             while hold and (hold in res.decode()):
                 self.logger.info(
@@ -920,7 +1096,7 @@ class VM:
                 )
                 con.write("\r".encode())
                 time.sleep(10)
-                res = con.read_until(wait.encode())
+                res = con.read_until(wait.encode(), timeout)
 
             cleaned_buf = (
                 (con.read_very_eager()) if clean_buffer else None
@@ -933,30 +1109,6 @@ class VM:
 
         self.logger.debug(f"writing to {con_name}: '{cmd}'")
         con.write("{}\r".format(cmd).encode())
-
-    def wait_write_scrapli(self, cmd, wait="__defaultpattern__"):
-        """
-        Wait for something on the serial port and then send command using Scrapli telnet channel
-
-        Arguments are:
-        - cmd: command to send (string)
-        - wait: prompt to wait for before sending command, defaults to # (string)
-        """
-        if wait:
-            # use class default wait pattern if none was explicitly specified
-            if wait == "__defaultpattern__":
-                wait = self.wait_pattern
-
-            self.logger.info(f"Waiting on console for: '{wait}'")
-
-            self.con_read_until(wait)
-
-        time.sleep(0.1)  # don't write to the console too fast
-
-        self.write_to_stdout(b"\n")
-
-        self.logger.info(f"Writing to console: '{cmd}'")
-        self.scrapli_tn.channel.write(f"{cmd}\r")
 
     def con_expect(self, regex_list, timeout=None):
         """
@@ -1050,17 +1202,11 @@ class VM:
     def _qemu_monitor_cmd(self, cmd, wait=False):
         """Send command to QEMU monitor. Returns output if wait is True."""
         try:
-            if self.use_scrapli:
-                self.scrapli_qm.channel.write(f"{cmd}\r")
-            else:
-                self.qm.write(f"{cmd}\r".encode())
+            self.qm.write(f"{cmd}\r".encode())
 
             if wait:
                 time.sleep(0.5)
-                if self.use_scrapli:
-                    return self.scrapli_qm.channel.read().decode()
-                else:
-                    return self.qm.read_very_eager().decode()
+                return self.qm.read_very_eager().decode()
             return None
         except Exception as e:
             self.logger.error(f"Failed to communicate with QEMU monitor: {e}")
@@ -1071,43 +1217,39 @@ class VM:
         os.makedirs(vm_dir, exist_ok=True)
 
         state_file = os.path.join(vm_dir, "state.img")
-        
+
         try:
             # Pause VM
             self.logger.info(f"Pausing VM {self.num}")
             self._qemu_monitor_cmd("stop")
             time.sleep(1)
 
-            # Start migration
+            # Start migration.
             self.logger.info(f"Saving state for VM {self.num}")
+
+            threads = os.cpu_count() or 8
+            self._qemu_monitor_cmd("migrate_set_capability multifd on")
+            self._qemu_monitor_cmd("migrate_set_capability mapped-ram on")
+            self._qemu_monitor_cmd(f"migrate_set_parameter multifd-channels {threads}")
+
             self._qemu_monitor_cmd("migrate_set_parameter max-bandwidth 100000000000")
-            self._qemu_monitor_cmd(f'migrate "exec:cat > {state_file}"')
+            self._qemu_monitor_cmd(f'migrate "file:{state_file}"')
 
-            # Wait for migration complete
-            timeout = 600
-            start = time.time()
-            while time.time() - start < timeout:
-                time.sleep(2)
-                response = self._qemu_monitor_cmd("info migrate", wait=True)
-
-                if "completed" in response:
-                    break
-                elif "failed" in response:
-                    self.logger.error(f"Migration failed. Status: {response}")
-                    raise Exception(f"Migration failed details: {response}")
-
-            # Copy disks
+            # Start copying disks in parallel with state migration.
             disks = self._get_disk_paths()
             secondary_disks = []
-            
+
             # Helper for parallel copy
             def _copy_disk(source, dest, desc):
                 self.logger.info(f"Copying {desc} disk {source} to {dest}")
                 subprocess.check_call(["cp", "--sparse=always", source, dest])
 
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = []
+
+            disk_executor = concurrent.futures.ThreadPoolExecutor()
+            disk_futures = []
+
+            try:
                 for i, disk_source in enumerate(disks):
                     if i == 0:
                         disk_dest_name = "disk.qcow2"
@@ -1116,13 +1258,31 @@ class VM:
                         disk_dest_name = os.path.basename(disk_source)
                         secondary_disks.append(disk_dest_name)
                         desc = "secondary"
-                    
+
                     dest_path = os.path.join(vm_dir, disk_dest_name)
-                    futures.append(executor.submit(_copy_disk, disk_source, dest_path, desc))
-                
-                # Wait for all copies to complete
-                for future in concurrent.futures.as_completed(futures):
+                    disk_futures.append(
+                        disk_executor.submit(_copy_disk, disk_source, dest_path, desc)
+                    )
+
+                # Wait for migration complete
+                timeout = 600
+                start = time.time()
+                while time.time() - start < timeout:
+                    time.sleep(2)
+                    response = self._qemu_monitor_cmd("info migrate", wait=True)
+
+                    if "completed" in response:
+                        break
+                    elif "failed" in response:
+                        self.logger.error(f"Migration failed. Status: {response}")
+                        raise Exception(f"Migration failed details: {response}")
+
+                # Wait for disk copies to complete
+                for future in concurrent.futures.as_completed(disk_futures):
                     future.result()  # Raises exception if copy failed
+
+            finally:
+                disk_executor.shutdown(wait=True)
 
             # Save metadata (MAC addresses for NICs) to restore devices correctly
             metadata_file = os.path.join(vm_dir, "metadata.json")
@@ -1131,15 +1291,15 @@ class VM:
                 "num_nics": self.num_nics,
                 "provision_pci_bus": self.provision_pci_bus,
                 "nics_per_pci_bus": self.nics_per_pci_bus,
-                "secondary_disks": secondary_disks
+                "secondary_disks": secondary_disks,
             }
 
             # Extract MAC addresses from QEMU via "info network" command
             try:
                 response = self._qemu_monitor_cmd("info network", wait=True)
-                
+
                 # Extract MAC addresses using regex pattern
-                mac_pattern = r'macaddr=([0-9a-f:]{17})'
+                mac_pattern = r"macaddr=([0-9a-f:]{17})"
                 macs = re.findall(mac_pattern, response, re.IGNORECASE)
                 metadata["mac_addresses"] = macs
                 self.logger.info(f"Extracted MAC addresses from QEMU: {macs}")
@@ -1154,7 +1314,11 @@ class VM:
             self.logger.info(f"Resuming VM {self.num}")
             self._qemu_monitor_cmd("cont")
 
-            return {"state": state_file, "disk": os.path.join(vm_dir, "disk.qcow2"), "metadata": metadata_file}
+            return {
+                "state": state_file,
+                "disk": os.path.join(vm_dir, "disk.qcow2"),
+                "metadata": metadata_file,
+            }
 
         except Exception as e:
             # Always try to resume
@@ -1245,6 +1409,23 @@ class VM:
         return str(self._smp)
 
     @property
+    def nic_type(self):
+        """
+        Read NIC type from the QEMU_NIC_TYPE environment variable.
+        If the QEMU_NIC_TYPE parameter is not set, the default value is used.
+        Should be provided as a QEMU device model, e.g. virtio-net-pci.
+        """
+
+        if "QEMU_NIC_TYPE" in os.environ:
+            return str(os.getenv("QEMU_NIC_TYPE"))
+
+        return str(self._nic_type)
+
+    @nic_type.setter
+    def nic_type(self, value):
+        self._nic_type = value
+
+    @property
     def qemu_additional_args(self):
         """
         Read additional qemu arguments (e.g. number of CPU cores) from the QEMU_ADDITIONAL_ARGS environment variable.
@@ -1273,7 +1454,9 @@ class VR:
             self.mgmt_passthrough = mgmt_passthrough_override.lower() == "true"
 
         # Check if we should restore from snapshot before VMs are created
-        if os.environ.get("RESTORE_SNAPSHOT") == "1" and os.path.exists("/snapshot.tar"):
+        if os.environ.get("RESTORE_SNAPSHOT") == "1" and os.path.exists(
+            "/snapshot.tar"
+        ):
             self.logger.info("Restoring from /snapshot.tar")
             self.snapshot_restore()
 
@@ -1304,12 +1487,12 @@ class VR:
                     self.logger.error(f"Failed to save VM {vm.num}: {e}")
                     raise
 
-            # Create tar
-            self.logger.info(f"Creating tar archive")
-            with tarfile.open(tar_path, "w") as tar:
-                for vm in self.vms:
-                    vm_dir = os.path.join(tmpdir, f"vm{vm.num}")
-                    tar.add(vm_dir, arcname=f"vm{vm.num}")
+            # Create tar.
+            self.logger.info("Creating tar archive")
+            tar_cmd = ["tar", "-Scf", tar_path, "-C", tmpdir]
+            for vm in self.vms:
+                tar_cmd.append(f"vm{vm.num}")
+            subprocess.check_call(tar_cmd)
 
         self.logger.info(f"Snapshot saved: {tar_path}")
         return tar_path
@@ -1325,8 +1508,7 @@ class VR:
         self.logger.info(f"Extracting snapshot: {tar_path}")
         os.makedirs(extract_dir, exist_ok=True)
 
-        with tarfile.open(tar_path, "r") as tar:
-            tar.extractall(extract_dir)
+        subprocess.check_call(["tar", "-Sxf", tar_path, "-C", extract_dir])
 
         self.logger.info(f"Snapshot extracted to: {extract_dir}")
         return extract_dir

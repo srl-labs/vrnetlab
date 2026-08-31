@@ -55,9 +55,7 @@ class CSR_vm(vrnetlab.VM):
             logger.info("License found")
             self.license = True
 
-        super(CSR_vm, self).__init__(
-            username, password, disk_image=disk_image, use_scrapli=True
-        )
+        super(CSR_vm, self).__init__(username, password, disk_image=disk_image)
 
         self.install_mode = install_mode
         self.num_nics = nics
@@ -116,6 +114,13 @@ do reload
         """
 
         v4_mgmt_address = vrnetlab.cidr_to_ddn(self.mgmt_address_ipv4)
+        ipv6_route = self.render_optional_mgmt_config(
+            "ipv6 route vrf clab-mgmt ::/0 {gateway}",
+            gateway=self.mgmt_gw_ipv6,
+        )
+        ipv6_address = self.render_optional_mgmt_config(
+            "ipv6 address {address}", address=self.mgmt_address_ipv6
+        )
 
         ip_domain_name = (
             "ip domain name example.com"
@@ -148,13 +153,13 @@ exit
 exit
 !
 ip route vrf clab-mgmt 0.0.0.0 0.0.0.0 {self.mgmt_gw_ipv4}
-ipv6 route vrf clab-mgmt ::/0 {self.mgmt_gw_ipv6}
+{ipv6_route}
 !
 interface GigabitEthernet 1
 description Containerlab management interface
 vrf forwarding clab-mgmt
 ip address {v4_mgmt_address[0]} {v4_mgmt_address[1]}
-ipv6 address {self.mgmt_address_ipv6}
+{ipv6_address}
 no shut
 exit
 !
