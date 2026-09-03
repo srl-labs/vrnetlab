@@ -34,6 +34,13 @@ def trace(self, message, *args, **kws):
 
 logging.Logger.trace = trace
 
+# Temporary password used to satisfy the forced password change on first login.
+# FortiOS >= 7.6 enables a password policy by default that requires at least 12
+# characters with an upper case letter, a lower case letter, a digit and a
+# non-alphanumeric character. The policy is disabled and the requested password
+# applied immediately afterwards, so this value is never the final password.
+BOOTSTRAP_PASSWORD = "Vrnetlab1!Boot"
+
 
 class FortiOS_vm(vrnetlab.VM):
     def __init__(self, hostname, username, password, conn_mode):
@@ -58,6 +65,7 @@ class FortiOS_vm(vrnetlab.VM):
         self.qemu_args.extend(["-uuid", os.getenv("FORTIGATE_UUID") or str(uuid.uuid4())])
         self.spins = 0
         self.running = None
+        self.credentials_configured = False
 
         # set up the extra empty disk image
         # for fortigate logs
@@ -93,14 +101,26 @@ class FortiOS_vm(vrnetlab.VM):
                 self.logger.info("matched login prompt")
 
                 self.wait_write(self.username, wait=None)
-                self.wait_write("", wait=self.username)
-                self.wait_write(self.password, wait="Password")
-                self.wait_write(self.password, wait=None)
+                if self.credentials_configured:
+                    # Password already applied, so this is an ordinary login.
+                    self.wait_write(self.password, wait="Password")
+                else:
+                    # The account has no password yet and FortiOS forces a
+                    # change straight away. Since 7.6 a password policy is
+                    # enabled by default which rejects weak passwords such as
+                    # the "admin" default, so satisfy it with a temporary
+                    # password and apply the requested one afterwards.
+                    self.wait_write("", wait=self.username)
+                    self.wait_write(BOOTSTRAP_PASSWORD, wait="Password")
+                    self.wait_write(BOOTSTRAP_PASSWORD, wait=None)
 
             if ridx == 1:
                 # if we dont match the FortiGate-VM64-KVM # we assume we already have some configuration and
                 # may continue with configure the system to our needs.
                 self.logger.debug("ridx == 1")
+                if not self.credentials_configured:
+                    self._configure_credentials()
+                    return
                 self.wait_write("config system global", wait=None)
                 hostname_command = "set hostname " + self.hostname
                 self.wait_write(hostname_command, wait="global")
@@ -121,6 +141,39 @@ class FortiOS_vm(vrnetlab.VM):
                 self.spins = 0
 
         self.spins += 1
+
+    def _configure_credentials(self):
+        """Drop the default password policy and apply the requested password.
+
+        The forced password change at first login had to use
+        BOOTSTRAP_PASSWORD to get past the policy that FortiOS >= 7.6 enables
+        by default. Disabling that policy lets the requested password be
+        applied verbatim, which matters because consumers of this image expect
+        to log in with it.
+
+        Committing the change logs the console session out, so the caller must
+        go back through the login prompt afterwards.
+        """
+        self.logger.info("applying requested credentials")
+        self.wait_write("config system password-policy", wait=None)
+        self.wait_write("set status disable", wait="(password-policy)")
+        self.wait_write("end", wait="(password-policy)")
+        self.wait_write("config system admin", wait=None)
+        self.wait_write(f"edit {self.username}", wait="(admin)")
+        self.wait_write(f"set password {self.password}", wait="(admin)")
+        # Changing your own account's password prompts for the current one on
+        # some releases (8.0 does, 7.4 does not), so only answer it if asked.
+        # Either branch consumes the prompt that follows, so the next write
+        # must not wait for that same prompt again or it deadlocks.
+        (pw_idx, _, _) = self.tn.expect(
+            [b"current administrator password", rb"\(admin\) #"], timeout=10
+        )
+        if pw_idx == 0:
+            self.wait_write(BOOTSTRAP_PASSWORD, wait=None)
+            self.tn.expect([rb"\(admin\) #"], timeout=10)
+        self.wait_write("next", wait=None)
+        self.wait_write("end", wait="(admin)")
+        self.credentials_configured = True
 
     def _wait_reset(self):
         """
