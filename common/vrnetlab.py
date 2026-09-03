@@ -56,6 +56,135 @@ def natural_sort_key(s, _nsre=re.compile("([0-9]+)")):
     return [int(text) if text.isdigit() else text.lower() for text in _nsre.split(s)]
 
 
+def _norm_cfg_token(s):
+    """Collapse all whitespace out of a config line/token and lowercase it, so
+    interface-name matching is insensitive to spacing and case. IOS-XR's
+    interface-name parser accepts "MgmtEth 0/RP0/CPU0/0" and "MgmtEth0/RP0/CPU0/0"
+    interchangeably, and different launchers format it both ways; this makes the
+    match indifferent to that."""
+    return "".join(s.split()).lower()
+
+
+_IOS_INTF_ADDR_RE = re.compile(r"(?i)^\s*(?:ip|ipv4|ipv6)\s+address\b")
+
+
+def strip_mgmt_interface_config(config_text, mgmt_intf, style):
+    """Remove the address configuration of management interface `mgmt_intf` from
+    a chunk of device config -- a user-supplied or previously-saved
+    startup-config that a launcher appends to / merges with its own
+    launcher-generated management stanza.
+
+    Every vrnetlab launcher configures the node's management interface itself,
+    from the container's *actual* IP -- that's the single source of truth. If the
+    appended config *also* sets an address on that interface (very likely if it
+    came from `containerlab save`, which captures the full running-config, or was
+    hand-written), it competes with the launcher's: on IOS-family platforms a
+    later address under the interface *replaces* it, so a stale one makes the
+    node unreachable; on Junos it is *added alongside* (Junos keeps multiple
+    addresses per interface), so the node stays reachable via the launcher's
+    address but carries a stale/foreign one. Either way the launcher's address
+    should be the interface's only one -- and a node that came up "healthy" (the
+    NOS booted fine) but on the wrong address is exactly the failure this avoids.
+
+    Keyed on the interface NAME, not the address value, on purpose. The stale
+    address is by definition *different* from the current one the launcher just
+    configured, so a value-based filter can't catch it -- only the interface
+    identity is invariant. Dropping every address the appended config puts on
+    this interface, whatever the value, guarantees the launcher's own address is
+    the only one left. (containerlab's save-side counterpart keys on the IP
+    instead, and correctly so: it runs against the *running* config, where the
+    interface holds the current address, and strips it so it is never persisted.)
+
+    `style` selects the config grammar:
+      "ios"   -- IOS / IOS-XE / IOS-XR / NX-OS / ASA: "interface <name>" followed by
+                 indented "ip|ipv4|ipv6 address ..." leaves, ended by "!" or a
+                 dedent to a new top-level statement. The interface header is
+                 kept (only address leaves under it are dropped) so any other
+                 per-interface config the user set is preserved.
+      "junos" -- Junos: both hierarchical ("<name> { ... address x; ... }",
+                 brace-scoped, "address x { ... }" option-blocks dropped whole)
+                 and flat set-style ("set interfaces <name> ... address x").
+
+    Whitespace and case in the interface name are ignored (see _norm_cfg_token).
+    """
+    target = _norm_cfg_token(mgmt_intf)
+    lines = config_text.split("\n")
+    out = []
+
+    if style == "ios":
+        in_if = False
+        for line in lines:
+            norm = _norm_cfg_token(line)
+            if norm == "interface" + target:
+                in_if = True
+                out.append(line)  # keep the mgmt interface header
+                continue
+            if in_if:
+                # The mgmt interface stanza ends at an explicit "!" delimiter or
+                # at the next "interface ..." header (some saved configs omit the
+                # "!"). A mere dedent does NOT end it, so a flush-left address
+                # leaf under the interface is still stripped -- a bare
+                # "ip address" is never a valid *global* command, and no
+                # non-interface global statement matches the address regex, so
+                # nothing outside the stanza is dropped.
+                if line.strip() == "!" or norm.startswith("interface"):
+                    in_if = False  # stanza ended; keep this line (fall through)
+                elif _IOS_INTF_ADDR_RE.match(line) and "description" not in line.lower():
+                    continue  # drop an address leaf under the mgmt interface
+            out.append(line)
+        return "\n".join(out)
+
+    if style == "junos":
+        i = 0
+        n = len(lines)
+        while i < n:
+            line = lines[i]
+            norm = _norm_cfg_token(line)
+            # flat set-style: "set interfaces <name> unit N family inet[6]
+            # address x". Match the "family inet[6] address" element specifically,
+            # and never a line carrying "description" -- so a
+            # `set interfaces <name> description "... family inet address ..."`
+            # (or any other statement that merely mentions the words) is left
+            # alone. A real address statement never contains "description".
+            if (
+                norm.startswith("setinterfaces" + target)
+                and ("familyinetaddress" in norm or "familyinet6address" in norm)
+                and "description" not in norm
+            ):
+                i += 1
+                continue
+            # hierarchical interface block opener: "<name> {"
+            if norm == target + "{":
+                out.append(line)
+                depth = 1
+                i += 1
+                while i < n and depth > 0:
+                    inner = lines[i]
+                    if (
+                        _norm_cfg_token(inner).startswith("address")
+                        and "description" not in inner.lower()
+                    ):
+                        d = inner.count("{") - inner.count("}")
+                        if d > 0:  # "address x { ... }" -> drop the whole block
+                            bd = d
+                            i += 1
+                            while i < n and bd > 0:
+                                bd += lines[i].count("{") - lines[i].count("}")
+                                i += 1
+                        else:  # "address x;" leaf
+                            i += 1
+                        continue
+                    depth += inner.count("{") - inner.count("}")
+                    out.append(inner)
+                    i += 1
+                continue
+            out.append(line)
+            i += 1
+        return "\n".join(out)
+
+    raise ValueError("unknown config style %r" % style)
+
+
 def run_command(cmd, cwd=None, background=False, shell=False):
     res = None
     try:
@@ -406,6 +535,17 @@ class VM:
             "-monitor chardev:monitor0",
             f"-chardev socket,id=serial0,host=::,port=50{self.num:02d},server=on,wait=off,telnet=on",
             "-serial chardev:serial0",
+            # qemu-guest-agent channel: out-of-band exec into the guest (e.g.
+            # `docker exec xrd /pkg/bin/xr_cli ...`) even when the node's
+            # management plane is down and the serial getty is masked. A per-VM
+            # UNIX socket rather than a TCP port -- nothing in the launcher
+            # connects to it (it is reached by `docker exec`-ing into the
+            # container and talking to the socket), and a unix path avoids any
+            # collision with the host-forwarded mgmt TCP ports regardless of how
+            # many VMs a node runs.
+            f"-chardev socket,id=qga0,path=/run/qga{self.num}.sock,server=on,wait=off",
+            "-device virtio-serial",
+            "-device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0",
             "-m",  # memory
             str(self.ram),
             "-cpu",  # cpu type

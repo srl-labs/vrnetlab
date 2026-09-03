@@ -124,8 +124,16 @@ class XRd_vRouter_vm(vrnetlab.VM):
         so no default route is needed and the data routing table stays clean.
         Data IPs come from the user's startup-config."""
         import ipaddress
-        mgmt_if = ipaddress.ip_interface(self.mgmt_address_ipv4)  # e.g. 10.0.0.15/24
+        mgmt_if = ipaddress.ip_interface(self.mgmt_address_ipv4)  # real clab IP, e.g. 172.20.20.2/24
         mgmt_v4 = f"{mgmt_if.ip} {mgmt_if.netmask}"
+        # Also configure IPv6 mgmt when the clab network provides it, so the
+        # launcher owns both families on MgmtEth (matches xrv9k/xrv). Without
+        # this, strip_mgmt_interface_config -- which removes every ip/ipv4/ipv6
+        # address the appended startup-config sets on MgmtEth -- would leave a
+        # dual-stack node with no launcher-managed IPv6 mgmt address.
+        mgmt_v6_line = ""
+        if self.mgmt_address_ipv6 and self.mgmt_address_ipv6 != "dhcp":
+            mgmt_v6_line = f"\n ipv6 address {self.mgmt_address_ipv6}"
         # Modelled on containerlab's official nodes/xrd/xrd.cfg. The bits XRd
         # needs for working SSH: `line default / transport input ssh` and
         # `secret` (not `secret 0`). MgmtEth gets the clab management address
@@ -144,7 +152,7 @@ netconf-yang agent
  ssh
 !
 interface MgmtEth0/RP0/CPU0/0
- ipv4 address {mgmt_v4}
+ ipv4 address {mgmt_v4}{mgmt_v6_line}
  no shutdown
 !
 ssh server v2
@@ -158,7 +166,18 @@ grpc
 """
         if os.path.exists(STARTUP_CONFIG_FILE):
             with open(STARTUP_CONFIG_FILE) as f:
-                cfg += f.read()
+                startup = f.read()
+            # The launcher owns MgmtEth0/RP0/CPU0/0 (configured above from the
+            # container's *actual* IP). Strip any address the appended
+            # startup-config sets on that interface so a stale saved/hand-written
+            # mgmt address can never win -- otherwise XR comes up on the old IP:
+            # "healthy" (XR is up) but unreachable at the address clab/DNS
+            # expect. Keyed on the interface name, not the address value: the
+            # stale value differs from the one just configured, so only the
+            # interface identity is invariant.
+            cfg += vrnetlab.strip_mgmt_interface_config(
+                startup, "MgmtEth0/RP0/CPU0/0", "ios"
+            )
             if not cfg.rstrip().endswith("end"):
                 cfg += "\nend\n"
         else:

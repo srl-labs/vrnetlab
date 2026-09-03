@@ -96,14 +96,15 @@ xrcli(){ timeout 25 docker exec xrd /pkg/bin/xr_cli "$1" 2>/dev/null; }
 # containerlab healthcheck, so we do not probe the address from the Linux netns
 # (XR owns it, so it does not live there).
 echo "waiting for XR control plane + management..."
+mgmt_up=0
 for i in $(seq 1 120); do
     if xrcli "show version" | grep -qi "cisco IOS XR"; then
         # '|| true' is essential: under `set -e`, a non-matching grep would
-        # otherwise abort guest-init before it ever emits the readiness marker.
+        # otherwise abort guest-init before it decides success/failure.
         mgmtline=$(xrcli "show ipv4 vrf all interface brief" | grep -i Mgmt || true)
         echo "[t=$((i*10))s] XR up; MgmtEth: ${mgmtline:-pending}"
         case "$mgmtline" in
-            *Up*Up*) echo "XR management is up"; break ;;
+            *Up*Up*) echo "XR management is up"; mgmt_up=1; break ;;
         esac
     else
         echo "[t=$((i*10))s] XR converging..."
@@ -111,12 +112,32 @@ for i in $(seq 1 120); do
     sleep 10
 done
 
-# Emit the readiness marker on the serial console for the vrnetlab launcher.
-# Repeat a few times so the launcher's serial poller reliably catches it.
+if [ "$mgmt_up" != 1 ]; then
+    # Management never came up. Emitting the readiness marker here is exactly what
+    # made the node report "healthy" while unreachable — the launcher sets
+    # running=True on the marker and writes "0 running" to /health regardless of
+    # mgmt. So we DON'T signal ready: the launcher keeps waiting (and eventually
+    # restarts the VM), and the node stays unhealthy. First, dump why — this goes
+    # to the console, so `docker logs`/serial shows the root cause on every attempt.
+    echo "!!! MgmtEth never reached Up/Up — NOT signalling ready. Diagnostics: !!!"
+    xrcli "show configuration failed startup"                 || true
+    xrcli "show running-config interface MgmtEth0/RP0/CPU0/0"  || true
+    xrcli "show interfaces MgmtEth0/RP0/CPU0/0"                || true
+    xrcli "show ipv4 interface MgmtEth0/RP0/CPU0/0 brief"      || true
+    xrcli "show logging last 80"                               || true
+    echo "=== guest-init FAILED (management down) ==="
+    # For interactive triage, reach the guest out-of-band via the qemu-guest-agent
+    # channel (the /run/qga<n>.sock unix socket inside the launcher container):
+    # guest-exec docker exec xrd /pkg/bin/xr_cli.
+    exit 1
+fi
+
+# Management is up — signal readiness to the vrnetlab launcher. Repeat a few
+# times so the launcher's serial poller reliably catches it.
 for n in 1 2 3 4 5; do
     for tty in /dev/ttyS0 /dev/console; do
         [ -w "$tty" ] && echo "${READY_MARKER}:${NODENAME}" > "$tty" 2>/dev/null || true
     done
     sleep 2
 done
-echo "=== guest-init done ==="
+echo "=== guest-init done (management up) ==="
