@@ -67,6 +67,25 @@ docker exec clab-cumulus-lab-cumulus1 \
 # Expected: if=ide,file=/config/cumulus_overlay.qcow2
 ```
 
+## Startup configuration
+
+Optional NVUE YAML can be mounted at `/config/startup.yaml`. Containerlab
+bind-mounts `clab-<lab>/<node>/config/` to `/config` automatically; place
+the file there or use an explicit bind:
+
+```yaml
+nodes:
+  cumulus1:
+    binds:
+      - cumulus1-startup.yaml:/config/startup.yaml
+```
+
+The launcher applies the file after first-boot bootstrap, once `switchd` and
+`nvued` are active, using `nv config patch` and `nv config apply --assume-yes`.
+
+Generate a starting point from a configured switch with
+`nv config show -o yaml`.
+
 ## Known issues and limitations
 
 - **KVM acceleration recommended**: Cumulus VX can run without KVM but switchd
