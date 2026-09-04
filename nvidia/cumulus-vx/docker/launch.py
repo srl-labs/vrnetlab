@@ -122,6 +122,14 @@ def _compute_renames(max_port, breakouts):
 
 class CumulusVX_vm(vrnetlab.VM):
     SHELL_PROMPT = ":~$"
+    # Line-anchored for tn.expect() (re.search, no MULTILINE). Optional hostname
+    # covers getty "bb-1-sspine-1 login: " / "cumulus login: " / bare "login: ".
+    # (?!Last ) rejects MOTD "Last login:". SHELL_REGEX escapes $ (not EOL).
+    LOGIN_REGEXES = [
+        rb"(?:^|\n)(?!Last )(?:[\w.-]+ )?login: ",
+        rb"(?:^|\n)(?!Last )(?:[\w.-]+ )?Login: ",
+    ]
+    SHELL_REGEX = rb":~\$"
 
     def __init__(self, hostname, username, password, conn_mode):
         # ── locate the Cumulus VX disk image ──────────────────────────────────
@@ -140,6 +148,7 @@ class CumulusVX_vm(vrnetlab.VM):
         self.hostname = hostname
         self.conn_mode = conn_mode
         self._bootstrap_done = False
+        self._post_ready_done = False
 
         # ── KVM-aware CPU selection ──────────────────────────────────────────
         # -cpu host requires KVM; without /dev/kvm QEMU exits immediately and
@@ -338,19 +347,29 @@ class CumulusVX_vm(vrnetlab.VM):
             self.start()
             return
 
-        # If first-boot setup is already done, poll switchd directly via
-        # the active serial session (no login prompt needed).
+        # If first-boot setup is already done, poll switchd via the serial
+        # session. udev + startup YAML run once; logout is retried alone.
         if self._bootstrap_done:
-            if not self._platform_is_ready():
-                self.spins += 1
-                return
-            self._write_udev_rules()
-            self.startup_config()
-            if not self._logout_console():
+            try:
+                if not self._post_ready_done:
+                    if not self._platform_is_ready():
+                        self.spins += 1
+                        return
+                    self._write_udev_rules()
+                    self.startup_config()
+                    self._post_ready_done = True
+                if not self._logout_console():
+                    self.logger.error(
+                        "Serial console logout failed — retrying "
+                        "(NVUE may block user replacement while logged in)"
+                    )
+                    self.spins += 1
+                    return
+            except Exception as exc:
                 self.logger.error(
-                    "Serial console logout failed — retrying "
-                    "(NVUE may block user replacement while logged in)"
+                    "Bootstrap serial error (%s) — reopening console", exc
                 )
+                self._reopen_serial()
                 self.spins += 1
                 return
             self.tn.close()
@@ -360,7 +379,7 @@ class CumulusVX_vm(vrnetlab.VM):
             return
 
         (ridx, match, res) = self.tn.expect(
-            [b"login: ", b"Login: ", b"cumulus login: "],
+            self.LOGIN_REGEXES,
             1,
         )
 
@@ -390,33 +409,81 @@ class CumulusVX_vm(vrnetlab.VM):
 
         self.spins += 1
 
+    def _reopen_serial(self):
+        """Re-open scrapli telnet after a timeout close so wait_write cannot crash PID 1."""
+        try:
+            self.scrapli_tn.close()
+        except Exception:
+            pass
+        try:
+            self.scrapli_tn.open()
+        except Exception as exc:
+            self.logger.error("Failed to reopen serial console: %s", exc)
+            return
+        try:
+            self.wait_write("\r", None)
+        except Exception:
+            pass
+
+    def _login_current(self):
+        """Log in on getty using the runtime password (after first-boot PAM)."""
+        self.wait_write(self.username, None)
+        self.wait_write(self.password, "Password:")
+
     def _platform_is_ready(self):
         """Check switchd and nvued are active via the serial console.
 
         telnetlib expect() uses regex substring search, so bare patterns like
         b"active" falsely match "is-active" and "inactive". Use sentinels.
         """
-        self.wait_write("\r", None)
-        self.wait_write(
-            "printf '__VR_switchd_%s__ __VR_nvued_%s__\\n' "
-            "$(systemctl is-active switchd 2>/dev/null) "
-            "$(systemctl is-active nvued 2>/dev/null)",
-            None,
-        )
-        time.sleep(1)
         try:
-            (_, match, res) = self.tn.expect(
-                [rb"__VR_switchd_active__ __VR_nvued_active__"],
+            self.wait_write("\r", None)
+            (ridx, match, _) = self.tn.expect(
+                self.LOGIN_REGEXES + [self.SHELL_REGEX],
+                8,
+            )
+            if match and ridx < len(self.LOGIN_REGEXES):
+                self.logger.debug(
+                    "Serial session dropped to login — re-authenticating"
+                )
+                try:
+                    self._login_current()
+                except Exception as exc:
+                    self.logger.error("Re-login failed (%s)", exc)
+                return False
+            if not match:
+                return False
+
+            self.wait_write(
+                "printf '__VR_switchd_%s__ __VR_nvued_%s__\\n' "
+                "$(systemctl is-active switchd 2>/dev/null) "
+                "$(systemctl is-active nvued 2>/dev/null)",
+                None,
+            )
+            time.sleep(1)
+            (ridx, match, res) = self.tn.expect(
+                [rb"__VR_switchd_active__ __VR_nvued_active__"]
+                + self.LOGIN_REGEXES,
                 5,
             )
-            if match:
+            if match and ridx == 0:
                 return True
+            if match:
+                self.logger.debug(
+                    "Serial session dropped to login during readiness check"
+                )
+                try:
+                    self._login_current()
+                except Exception as exc:
+                    self.logger.error("Re-login failed (%s)", exc)
+                return False
             self.logger.debug(
                 "Platform not ready (console tail): %s",
                 res.decode(errors="replace")[-300:],
             )
         except Exception as exc:
             self.logger.debug("Platform readiness check failed: %s", exc)
+            self._reopen_serial()
         return False
 
     def startup_config(self):
@@ -445,8 +512,19 @@ class CumulusVX_vm(vrnetlab.VM):
             None,
         )
         self.wait_write("nv config patch %s" % guest_path, timeout=120)
-        self.wait_write("nv config apply --assume-yes", timeout=300)
-        self.wait_write("rm -f %s" % guest_path, timeout=15)
+        # Apply keeps running after :~$ returns. Wait for a token printed
+        # after apply exits. Do not type "?" on this serial tty (CSI [?2004
+        # eats it, so $? becomes $). printf %s so the wait string is not in
+        # the command echo (that would match before apply finishes).
+        self.wait_write(
+            "if nv config apply --assume-yes; "
+            "then printf '__VR_NV_APPLY_%s__\\n' 0; "
+            "else printf '__VR_NV_APPLY_%s__\\n' 1; fi",
+            timeout=300,
+        )
+        self.wait_write(
+            "rm -f %s" % guest_path, wait="__VR_NV_APPLY_0__", timeout=300
+        )
 
     def _logout_console(self):
         """End the serial console session before closing telnet.
@@ -455,17 +533,16 @@ class CumulusVX_vm(vrnetlab.VM):
         Returns True when the login prompt is observed after logout.
         """
         self.logger.info("Logging out serial console session")
+        self.wait_write("\r", None)
         self.wait_write("logout", None)
-        (_, match, res) = self.tn.expect(
-            [b"login: ", b"Login: ", b"cumulus login: "],
-            30,
-        )
+        self.wait_write("\r", None)
+        (ridx, match, res) = self.tn.expect(self.LOGIN_REGEXES, 30)
         if match:
             self.logger.debug("Serial console login prompt detected after logout")
             return True
         self.logger.error(
             "Login prompt not detected after logout (console tail): %s",
-            res.decode(errors="replace")[-300:],
+            res.decode(errors="replace")[-300:] if res else "",
         )
         return False
 
