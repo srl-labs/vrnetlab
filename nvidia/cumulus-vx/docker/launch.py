@@ -122,9 +122,7 @@ def _compute_renames(max_port, breakouts):
 
 class CumulusVX_vm(vrnetlab.VM):
     SHELL_PROMPT = ":~$"
-    # Line-anchored for tn.expect() (re.search, no MULTILINE). Optional hostname
-    # covers getty "bb-1-sspine-1 login: " / "cumulus login: " / bare "login: ".
-    # (?!Last ) rejects MOTD "Last login:". SHELL_REGEX escapes $ (not EOL).
+    # Login prompt patterns for serial expect().
     LOGIN_REGEXES = [
         rb"(?:^|\n)(?!Last )(?:[\w.-]+ )?login: ",
         rb"(?:^|\n)(?!Last )(?:[\w.-]+ )?Login: ",
@@ -347,8 +345,7 @@ class CumulusVX_vm(vrnetlab.VM):
             self.start()
             return
 
-        # If first-boot setup is already done, poll switchd via the serial
-        # session. udev + startup YAML run once; logout is retried alone.
+        # Post-first-boot: readiness, config, logout.
         if self._bootstrap_done:
             try:
                 if not self._post_ready_done:
@@ -410,7 +407,7 @@ class CumulusVX_vm(vrnetlab.VM):
         self.spins += 1
 
     def _reopen_serial(self):
-        """Re-open scrapli telnet after a timeout close so wait_write cannot crash PID 1."""
+        """Re-open serial console after disconnect."""
         try:
             self.scrapli_tn.close()
         except Exception:
@@ -426,7 +423,7 @@ class CumulusVX_vm(vrnetlab.VM):
             pass
 
     def _login_current(self):
-        """Log in on getty using the runtime password (after first-boot PAM)."""
+        """Log in with configured credentials."""
         self.wait_write(self.username, None)
         self.wait_write(self.password, "Password:")
 
@@ -512,10 +509,7 @@ class CumulusVX_vm(vrnetlab.VM):
             None,
         )
         self.wait_write("nv config patch %s" % guest_path, timeout=120)
-        # Apply keeps running after :~$ returns. Wait for a token printed
-        # after apply exits. Do not type "?" on this serial tty (CSI [?2004
-        # eats it, so $? becomes $). printf %s so the wait string is not in
-        # the command echo (that would match before apply finishes).
+        # Wait for NVUE apply completion sentinel.
         self.wait_write(
             "if nv config apply --assume-yes; "
             "then printf '__VR_NV_APPLY_%s__\\n' 0; "
