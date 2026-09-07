@@ -9,6 +9,7 @@ RUN apt-get update -qy \
 
 ARG IMAGE
 COPY *.py /
+COPY features /features
 COPY $IMAGE /
 
 EXPOSE 22 161/udp 830 5000 10000-10099 3443 80 443
