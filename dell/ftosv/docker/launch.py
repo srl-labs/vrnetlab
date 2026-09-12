@@ -47,8 +47,13 @@ class FTOS_vm(vrnetlab.VM):
         if disk_image == "":
             logging.getLogger().info("Disk image was not found")
             exit(1)
+        # OS10 (10.6.x, kernel 6.1) hangs right after kernel load with -cpu host on AMD EPYC (Zen) hosts;
+        # the generic qemu64 model boots reliably. Override with the QEMU_CPU env var if needed.
         super(FTOS_vm, self).__init__(
-            username, password, disk_image=disk_image, ram=4096, smp="4"
+            username, password, disk_image=disk_image, ram=4096, smp="4", cpu="qemu64",
+            # OS10 platform services (NAS/PPM/IFM) are unreliable unless the VM sees the full
+            # S5248F port set; vrnetlab fills the gaps with dummy tap NICs.
+            min_dp_nics=56,
         )
         self.credentials = [["admin", "admin"]]
         self.hostname = hostname
