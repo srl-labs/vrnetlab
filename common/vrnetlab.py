@@ -909,7 +909,7 @@ class VM:
             res.extend(
                 [
                     "-device",
-                    f"{self.nic_type},netdev={interface_name},id={interface_name},mac={gen_mac(i)},bus=pci.{pci_bus},addr=0x{addr}",
+                    f"{self.nic_type},netdev={interface_name},id={interface_name},mac={gen_mac(i)},bus=pci.{pci_bus},addr=0x{addr:x}",
                     "-netdev",
                     f"tap,ifname={interface_name},id={interface_name},script=no,downscript=no",
                 ]
