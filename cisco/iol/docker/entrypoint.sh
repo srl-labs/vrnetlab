@@ -13,9 +13,13 @@ sleep 5
 # Run IOUYAP
 exec /usr/bin/iouyap 513 -q &
 
-# Get the highest numbered eth interface
-max_eth=$(ls /sys/class/net | grep eth | grep -o -E '[0-9]+' | sort -n | tail -1)
-num_slots=$(( (max_eth + 4) / 4 ))
+# Use the declared slot count when provided, otherwise get the highest numbered eth interface
+if [ -n "$CLAB_IOL_NUM_SLOTS" ]; then
+    num_slots=$CLAB_IOL_NUM_SLOTS
+else
+    max_eth=$(ls /sys/class/net | grep eth | grep -o -E '[0-9]+' | sort -n | tail -1)
+    num_slots=$(( (max_eth + 4) / 4 ))
+fi
 
 # Start IOL
 exec /iol/iol.bin $IOL_PID -e $num_slots -s 0 -c config.txt -n 1024
