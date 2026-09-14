@@ -10,6 +10,7 @@ import sys
 import uuid
 
 import vrnetlab
+from passlib.hash import sha512_crypt
 
 STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
 
@@ -58,6 +59,9 @@ class VSRX_vm(vrnetlab.VM):
         self.conn_mode = conn_mode
         self.num_nics = 10
         self.hostname = hostname
+        # create SHA-512 hash of the password
+        # (Junos config-drive load does not process plain-text-password-value)
+        password_hash = sha512_crypt.hash(password)
 
         with open("init.conf", "r") as file:
             cfg = file.read()
@@ -82,6 +86,8 @@ class VSRX_vm(vrnetlab.VM):
             .replace("{MGMT_IPV6_ROUTE_CONFIG}", ipv6_route_config)
             .replace("{HOSTNAME}", self.hostname)
         )
+        # replace CRYPT_PSWD placeholder with the node's given password
+        cfg = cfg.replace("{CRYPT_PSWD}", password_hash)
 
         with open("init.conf", "w") as file:
             cfg = file.write(cfg)

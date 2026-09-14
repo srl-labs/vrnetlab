@@ -10,8 +10,10 @@ Both "classic" vSRX 2.0 and the new vSRX 3.0 images are compatible with this vrn
 Download the vSRX 3.0 trial `.qcow2` image from https://support.juniper.net/support/downloads/?p=vsrx-evaluation
 and place it in this directory. A Juniper account is required to download the evaluation image.
 
-After typing `make`, a new image will appear called `vrnetlab/vjunosevolved`.
+After typing `make`, a new image will appear called `vrnetlab/juniper_vsrx:22.3R1.11` or whatever version you are using.
 Run `docker images` to confirm this.
+
+Tested with versions: `22.3R1.11`, `21.3R1.9`.
 
 ## System requirements
 
