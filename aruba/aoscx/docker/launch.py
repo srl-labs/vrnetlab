@@ -7,6 +7,7 @@ import re
 import signal
 import sys
 import time
+import uuid
 
 import vrnetlab
 
@@ -53,6 +54,9 @@ class AOSCX_vm(vrnetlab.VM):
         self.conn_mode = conn_mode
         self.num_nics = 20
         self.nic_type = "virtio-net-pci"
+
+        # generate UUID (the core reads the UUID env var centrally)
+        self.uuid = self.uuid or str(uuid.uuid4())
 
     def bootstrap_spin(self):
         """This function should be called periodically to do work."""

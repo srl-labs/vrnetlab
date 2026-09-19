@@ -88,8 +88,8 @@ class VSRX_vm(vrnetlab.VM):
 
         self.startup_config()
 
-        # generate UUID to attach
-        self.qemu_args.extend(["-uuid", str(uuid.uuid4())])
+        # generate UUID to attach (the core reads the UUID env var centrally)
+        self.uuid = self.uuid or str(uuid.uuid4())
         # mount config disk with startup config (juniper.conf)
         self.qemu_args.extend(
             [
