@@ -71,7 +71,7 @@ class SONiC_vm(vrnetlab.VM):
             # Login
             self.wait_write("\r", None)
             self.wait_write(DEFAULT_USER, wait="login:")
-            self.wait_write(DEFAULT_PASSWORD, wait="Password:")
+            self.wait_write(os.getenv("PASSWORD", DEFAULT_PASSWORD), wait="Password:")
             self.wait_write("", wait="%s@" % (self.username))
             self.logger.info("Login completed")
 
@@ -165,7 +165,7 @@ if __name__ == "__main__":
         "--trace", action="store_true", help="enable trace level logging"
     )
     parser.add_argument("--hostname", default="sonic", help="SONiC hostname")
-    parser.add_argument("--username", default="admin", help="Username")
+    parser.add_argument("--username", default=DEFAULT_USER, help="Username")
     parser.add_argument("--password", default="admin", help="Password")
     parser.add_argument(
         "--connection-mode", default="tc", help="Connection mode to use in the datapath"
