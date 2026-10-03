@@ -198,6 +198,16 @@ ssh timeout 60"""
             with open(STARTUP_CONFIG_FILE, "r") as config:
                 startup_config = config.read()
                 self.logger.debug("Applying startup configuration")
+                # Strip any address the startup config sets on the mgmt
+                # interface before applying it, so a stale saved/hand-written
+                # mgmt address can never override the interface Management0/0
+                # stanza pushed above in this same session -- otherwise the
+                # firewall comes up "healthy" but unreachable at the address
+                # clab/DNS expect. Keyed on interface name, not address value
+                # (the stale value differs from the current one).
+                startup_config = vrnetlab.strip_mgmt_interface_config(
+                    startup_config, "Management0/0", "ios"
+                )
                 con.send_configs(startup_config.splitlines())
         else:
             self.logger.info("User provided startup configuration is not found.")
