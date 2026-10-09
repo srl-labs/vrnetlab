@@ -4,4 +4,4 @@ from fos.launch import main
 
 
 if __name__ == "__main__":
-    main("FortiGate")
+    main("FortiProxy")

@@ -31,3 +31,5 @@ __pycache__/
 
 # ignore clab- dirs
 clab-*
+
+__pycache__/
