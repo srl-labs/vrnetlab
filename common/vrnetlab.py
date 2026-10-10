@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import select
 import shutil
 import subprocess
 import sys
@@ -97,6 +98,16 @@ class _Console:
         self._driver.channel.write(data)
 
     def _read(self):
+        # channel.read() blocks until timeout_transport (3600 s) when the console is silent,
+        # so the timeout in read_until()/expect() is never evaluated and a missing prompt
+        # hangs the bootstrap. Poll the socket first and return nothing if no data is ready.
+        transport = self._driver.transport
+        sock = getattr(getattr(transport, "socket", None), "sock", None)
+        pending = getattr(transport, "_raw_buf", b"") or getattr(transport, "_cooked_buf", b"")
+        if sock is not None and not pending:
+            readable, _, _ = select.select([sock], [], [], 0.1)
+            if not readable:
+                return b""
         data = self._driver.channel.read()
         if data:
             # mirror console output to stdout so it shows up in docker logs
