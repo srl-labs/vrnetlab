@@ -978,6 +978,7 @@ class OpenWRT_vm(vrnetlab.VM):
         # 1. Read package list from ENV variable
         if not self.packages:
             self.logger.info("❌ No packages specified in ENV variable `PACKAGES`.")
+            return changes_network
         # Split the package list (supports both spaces and commas)
         packages = [
             pkg.strip()
@@ -986,6 +987,7 @@ class OpenWRT_vm(vrnetlab.VM):
         ]
         if not packages:
             self.logger.info("❌ No valid packages found after parsing `PACKAGES`.")
+            return changes_network
 
         # 2. Run `opkg update` before installing packages
         self.logger.info("\n[🔄] Running `opkg update`...")
