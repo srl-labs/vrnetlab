@@ -503,8 +503,11 @@ class VM:
 
         self.logger.debug("qemu cmd: {}".format(" ".join(cmd)))
 
+        # exec: let bash replace itself with qemu. Otherwise the fd redirections used by the
+        # macvtap datapath keep bash as the parent, stop() only terminates bash and qemu is
+        # orphaned holding the monitor/serial ports.
         self.p = subprocess.Popen(
-            " ".join(cmd),
+            "exec " + " ".join(cmd),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True,
