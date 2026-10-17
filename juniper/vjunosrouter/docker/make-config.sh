@@ -31,7 +31,9 @@ cp -v $1 $STAGING/config
 qemu-img create -f raw $2 32M
 LOOP_EXITCODE=1
 while [ $LOOP_EXITCODE != 0 ]; do
-	LOOPDEV=`losetup -f`
+	# util-linux >= 2.40 appends a " (lost)" marker to the output of losetup -f
+	# when the device node does not exist, keep the device path only
+	LOOPDEV=`losetup -f | awk '{print $1}'`
 	if [ ! -b ${LOOPDEV} ]; then
 		echo "Free loop device ${LOOPDEV} does not exist, manually creating loop device node"
 		LOOPINDEX=`echo ${LOOPDEV} | grep -Po "\d+"`
