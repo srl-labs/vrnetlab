@@ -88,8 +88,10 @@ class VSRX_vm(vrnetlab.VM):
         # replace CRYPT_PSWD placeholder with the node's given password
         cfg = cfg.replace("{CRYPT_PSWD}", password_hash)
 
-        with open("init.conf", "w") as file:
-            cfg = file.write(cfg)
+        # write the rendered config to juniper.conf, keep init.conf intact
+        # so that the container can be restarted
+        with open("juniper.conf", "w") as file:
+            file.write(cfg)
 
         self.startup_config()
 
@@ -104,20 +106,16 @@ class VSRX_vm(vrnetlab.VM):
     def startup_config(self):
         """Load additional config provided by user and append initial
         configurations set by vrnetlab."""
-        # if startup cfg DNE
-        if not os.path.exists(STARTUP_CONFIG_FILE):
-            self.logger.trace(f"Startup config file {STARTUP_CONFIG_FILE} is not found")
-            # rename init.conf to juniper.conf, this is our startup config
-            os.rename("init.conf", "juniper.conf")
-
-        # if startup cfg file is found
-        else:
+        # juniper.conf is (re)rendered from the pristine init.conf template on
+        # every start, so append the user startup config to it if it exists
+        if os.path.exists(STARTUP_CONFIG_FILE):
             self.logger.trace(
-                f"Startup config file {STARTUP_CONFIG_FILE} found, appending initial configuration"
+                f"Startup config file {STARTUP_CONFIG_FILE} found, appending to initial configuration"
             )
-            # append startup cfg to inital configuration
-            append_cfg = f"cat init.conf {STARTUP_CONFIG_FILE} >> juniper.conf"
-            subprocess.run(append_cfg, shell=True)
+            with open(STARTUP_CONFIG_FILE, "r") as file:
+                startup_cfg = file.read()
+            with open("juniper.conf", "a") as file:
+                file.write(startup_cfg)
 
         # generate mountable config disk based on juniper.conf file with base vrnetlab configs
         subprocess.run(
