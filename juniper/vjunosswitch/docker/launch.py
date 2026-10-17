@@ -11,6 +11,8 @@ import vrnetlab
 
 # loadable startup config
 STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
+# initial configuration rendered from the init.conf template on every start
+JUNIPER_CONFIG_FILE = "juniper.conf"
 
 
 def handle_SIGCHLD(signal, frame):
@@ -82,8 +84,9 @@ class VJUNOSSWITCH_vm(vrnetlab.VM):
             .replace("{HOSTNAME}", self.hostname)
         )
 
-        # write changes to init.conf file
-        with open("init.conf", "w") as file:
+        # write the rendered config to juniper.conf, keep init.conf intact
+        # so that the container can be restarted
+        with open(JUNIPER_CONFIG_FILE, "w") as file:
             file.write(cfg)
 
         # pass in user startup config
@@ -115,23 +118,19 @@ class VJUNOSSWITCH_vm(vrnetlab.VM):
     def startup_config(self):
         """Load additional config provided by user and append initial
         configurations set by vrnetlab."""
-        # if startup cfg DNE
-        if not os.path.exists(STARTUP_CONFIG_FILE):
-            self.logger.trace(f"Startup config file {STARTUP_CONFIG_FILE} is not found")
-            # rename init.conf to juniper.conf, this is our startup config
-            os.rename("init.conf", "juniper.conf")
-
-        # if startup cfg file is found
-        else:
+        # juniper.conf is (re)rendered from the pristine init.conf template on
+        # every start, so append the user startup config to it if it exists
+        if os.path.exists(STARTUP_CONFIG_FILE):
             self.logger.trace(
-                f"Startup config file {STARTUP_CONFIG_FILE} found, appending initial configuration"
+                f"Startup config file {STARTUP_CONFIG_FILE} found, appending to initial configuration"
             )
-            # append startup cfg to inital configuration
-            append_cfg = f"cat init.conf {STARTUP_CONFIG_FILE} >> juniper.conf"
-            subprocess.run(append_cfg, shell=True)
+            with open(STARTUP_CONFIG_FILE, "r") as file:
+                startup_cfg = file.read()
+            with open(JUNIPER_CONFIG_FILE, "a") as file:
+                file.write(startup_cfg)
 
         # generate mountable config disk based on juniper.conf file with base vrnetlab configs
-        subprocess.run(["./make-config.sh", "juniper.conf", "config.img"], check=True)
+        subprocess.run(["./make-config.sh", JUNIPER_CONFIG_FILE, "config.img"], check=True)
 
     def bootstrap_spin(self):
         """This function should be called periodically to do work."""
