@@ -13,6 +13,8 @@ from passlib.hash import sha512_crypt
 
 # loadable startup config
 STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
+# initial configuration rendered from the init.conf template on every start
+JUNIPER_CONFIG_FILE = "juniper.conf"
 
 
 def handle_SIGCHLD(signal, frame):
@@ -92,7 +94,7 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
 
         # write the rendered config to juniper.conf, keep init.conf intact
         # so that the container can be restarted
-        with open("juniper.conf", "w") as file:
+        with open(JUNIPER_CONFIG_FILE, "w") as file:
             file.write(cfg)
 
         # pass in user startup config
@@ -155,11 +157,11 @@ class VJUNOSEVOLVED_vm(vrnetlab.VM):
             )
             with open(STARTUP_CONFIG_FILE, "r") as file:
                 startup_cfg = file.read()
-            with open("juniper.conf", "a") as file:
+            with open(JUNIPER_CONFIG_FILE, "a") as file:
                 file.write(startup_cfg)
 
         # generate mountable config disk based on juniper.conf file with base vrnetlab configs
-        subprocess.run(["./make-config.sh", "juniper.conf", "config.img"], check=True)
+        subprocess.run(["./make-config.sh", JUNIPER_CONFIG_FILE, "config.img"], check=True)
 
     def bootstrap_spin(self):
         """This function should be called periodically to do work."""

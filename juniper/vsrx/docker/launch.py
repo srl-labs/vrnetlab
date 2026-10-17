@@ -12,6 +12,8 @@ import vrnetlab
 from passlib.hash import sha512_crypt
 
 STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
+# initial configuration rendered from the init.conf template on every start
+JUNIPER_CONFIG_FILE = "juniper.conf"
 
 
 def handle_SIGCHLD(signal, frame):
@@ -90,7 +92,7 @@ class VSRX_vm(vrnetlab.VM):
 
         # write the rendered config to juniper.conf, keep init.conf intact
         # so that the container can be restarted
-        with open("juniper.conf", "w") as file:
+        with open(JUNIPER_CONFIG_FILE, "w") as file:
             file.write(cfg)
 
         self.startup_config()
@@ -114,12 +116,12 @@ class VSRX_vm(vrnetlab.VM):
             )
             with open(STARTUP_CONFIG_FILE, "r") as file:
                 startup_cfg = file.read()
-            with open("juniper.conf", "a") as file:
+            with open(JUNIPER_CONFIG_FILE, "a") as file:
                 file.write(startup_cfg)
 
         # generate mountable config disk based on juniper.conf file with base vrnetlab configs
         subprocess.run(
-            ["./make-config-iso.sh", "juniper.conf", "config.iso"], check=True
+            ["./make-config-iso.sh", JUNIPER_CONFIG_FILE, "config.iso"], check=True
         )
 
     def bootstrap_spin(self):
