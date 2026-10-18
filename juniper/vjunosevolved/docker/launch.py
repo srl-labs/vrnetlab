@@ -44,9 +44,7 @@ logging.Logger.trace = trace
 
 class VJUNOSEVOLVED_vm(vrnetlab.VM):
     def __init__(self, hostname, username, password, conn_mode):
-        for e in os.listdir("/"):
-            if re.search(".qcow2$", e):
-                disk_image = "/" + e
+        disk_image = vrnetlab.find_disk_image()
         super(VJUNOSEVOLVED_vm, self).__init__(
             username,
             password,

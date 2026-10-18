@@ -3,7 +3,6 @@
 import datetime
 import logging
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -43,9 +42,7 @@ logging.Logger.trace = trace
 
 class VSRX_vm(vrnetlab.VM):
     def __init__(self, hostname, username, password, conn_mode):
-        for e in os.listdir("/"):
-            if re.search(".qcow2$", e):
-                disk_image = "/" + e
+        disk_image = vrnetlab.find_disk_image()
         super(VSRX_vm, self).__init__(
             username,
             password,

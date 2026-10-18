@@ -80,6 +80,40 @@ def boot_delay():
         time.sleep(int(delay))
 
 
+def find_disk_image(directory: str = "/") -> str:
+    """Locate the VM's base disk image in the given directory.
+
+    Only files matching the base image are returned. Overlays created by
+    vrnetlab on (re)starts (`<name>-overlay.qcow2`) and hardlink aliases
+    that containerlab creates on container stop (`clab-<tag>.qcow2`) are
+    skipped, so that the same base image - and thereby the same overlay -
+    is discovered on every start of the container. This keeps VM state
+    (e.g. saved configs) persistent across container restarts.
+    """
+    candidates = []
+    for entry in sorted(os.listdir(directory)):
+        if not entry.endswith(".qcow2"):
+            continue
+        if entry.endswith("-overlay.qcow2"):
+            continue  # vrnetlab overlay image
+        if entry.startswith("clab-"):
+            continue  # containerlab pre-stop hardlink alias
+        candidates.append(os.path.join(directory, entry))
+
+    if not candidates:
+        raise FileNotFoundError(
+            f"No disk image found in {directory}: no .qcow2 file present"
+        )
+
+    if len(candidates) > 1:
+        logging.getLogger().warning(
+            f"Multiple disk image candidates found: {candidates}, "
+            f"picking the first one: {candidates[0]}"
+        )
+
+    return candidates[0]
+
+
 class _Console:
     """telnetlib-compatible wrapper around a scrapli channel (qemu serial console / monitor)."""
 
