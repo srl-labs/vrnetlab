@@ -16,6 +16,10 @@ UNKNOWN_STALL_SECONDS = 30
 UNKNOWN_STALL_NEWLINE_LIMIT = 3
 
 
+class KernelPanicError(RuntimeError):
+    """Raised when the guest kernel reports a panic on the serial console."""
+
+
 class FOSCliDriver:
     """Owns serial reads and delegates command dispatch to the commander."""
 
@@ -67,6 +71,7 @@ class FOSCliDriver:
             FOSCliState.CREDENTIAL_REJECTED: self._credential_rejected,
             FOSCliState.LIC_FAIL: self._license_failed,
             FOSCliState.TN_TIMEOUT: self._timeout,
+            FOSCliState.KERNEL_PANIC: self._kernel_panic,
             FOSCliState.UNKNOWN: self._unknown,
         }
 
@@ -255,6 +260,10 @@ class FOSCliDriver:
     def _unknown(self):
         if self._last_known_state == FOSCliState.REBOOTING:
             self._idle_spins += 1
+
+    @staticmethod
+    def _kernel_panic():
+        raise KernelPanicError("Kernel panic detected on serial console")
 
     def _note_unknown_output(self):
         self._unknown_started_at = time.monotonic()

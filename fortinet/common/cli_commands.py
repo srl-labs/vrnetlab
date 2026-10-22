@@ -14,6 +14,11 @@ class SessionLossAction(Enum):
     FAIL = auto()
 
 
+class ContextLossAction(Enum):
+    RESTART_BLOCK = auto()
+    FAIL = auto()
+
+
 @dataclass(frozen=True, init=False)
 class CommandSpec:
     line: str
@@ -23,10 +28,12 @@ class CommandSpec:
     session_loss: SessionLossAction = SessionLossAction.RESTART_BLOCK
     expected_completion_state: object = None
     fail_on_error: bool = False
+    context_loss: ContextLossAction = ContextLossAction.RESTART_BLOCK
 
     def __init__(self, line, completion_states=(), capture_output=False,
                  suppress_output=False, session_loss=SessionLossAction.RESTART_BLOCK,
-                 expected_completion_state=None, fail_on_error=False):
+                 expected_completion_state=None, fail_on_error=False,
+                 context_loss=None):
         object.__setattr__(self, "line", line)
         object.__setattr__(self, "completion_states", completion_states)
         object.__setattr__(self, "capture_output", capture_output)
@@ -34,11 +41,24 @@ class CommandSpec:
         object.__setattr__(self, "session_loss", session_loss)
         object.__setattr__(self, "expected_completion_state", expected_completion_state)
         object.__setattr__(self, "fail_on_error", fail_on_error)
+        if context_loss is None:
+            # Commands that must not replay after logout must not replay after
+            # an unexpected scope exit either. Features can override this policy.
+            context_loss = (
+                ContextLossAction.RESTART_BLOCK
+                if session_loss == SessionLossAction.RESTART_BLOCK
+                else ContextLossAction.FAIL
+            )
+        object.__setattr__(self, "context_loss", context_loss)
         self.__post_init__()
 
     def __post_init__(self):
         if "\r" in self.line or "\n" in self.line:
             raise ValueError("CLI commands must contain exactly one line")
+
+    @property
+    def closes_scope(self):
+        return self.line.strip().lower() in {"next", "end"}
 
 
 @dataclass
@@ -47,9 +67,13 @@ class CommandAttempt:
     number: int
     session_epoch: int
     output: bytearray = field(default_factory=bytearray)
+    prompt_context_before: tuple | None = None
+    prompt_context_after: tuple | None = None
+    block_index: int | None = None
+    retry_count: int = 0
 
     def on_output(self, output):
-        if not self.spec.capture_output:
+        if not (self.spec.capture_output or self.spec.closes_scope):
             return False
         data = bytes(output)
         self.output.extend(data)

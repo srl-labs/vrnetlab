@@ -128,16 +128,40 @@ before continuing. By default, a command completes at the next command prompt.
 Some commands override completion states, for example confirmation prompts or
 reboot messages.
 
+Scope-closing commands (`next` and `end`) always capture their output and check
+for `Command fail. Return code <number>`, including builds that append a period
+after the code. A closing failure stops the feature before completion callbacks
+or further commands, even when `fail_on_error=False`. It follows the bootstrap
+error policy: abort normally, or skip the failed feature when
+`FOS_EXIT_ON_BOOTSTRAP_ERROR=false`. This does not change error handling for
+individual `set` commands, which can deliberately tolerate unsupported fields.
+
 Session loss is explicit. Each command carries a `SessionLossAction`:
 
 - `RESTART_BLOCK`: replay the current block from the start
 - `COMPLETE_BLOCK`: treat the block as complete
 - `CONTINUE`: do not replay the disruptive command
 - `VALIDATE`: reserve for commands that need post-loss validation
-- `FAIL`: raise immediately
+- `FAIL`: report failure through the configured bootstrap error policy
 
 This matters because commands such as license restore and password updates can
 drop the active admin session. Replaying them blindly can corrupt state or loop.
+
+Unexpected prompt context changes call `Feature.on_context_loss(attempt)`.
+The feature returns `ContextLossAction.RESTART_BLOCK` or `FAIL`. By default,
+commands that allow session-loss replay also allow context-loss replay; commands
+with another session-loss policy decline context-loss replay unless explicitly
+configured otherwise. Context loss does not invoke session-loss callbacks, since
+those may commit credential or licensing transitions.
+
+The commander allows one recovery per command position within a submitted block,
+shared between context loss and session loss. Recovery replays the block's scope
+openers and commands. If necessary, the commander sends one `abort` to restore
+the block's initial prompt context before replay. A repeated loss at the same
+command or failure to restore that context follows the bootstrap error policy.
+The allowance resets when the feature submits a new block. Cleanup commands also
+have one session-loss retry. Attempts expose `retry_count` and the prompt context
+before and after execution so features can make their recovery decision.
 
 The dispatcher also manages cleanup actions and standard-output contexts.
 Features can request console output mode `standard` for machine-readable output;
@@ -221,6 +245,7 @@ on_output(output)
 on_command_executed(command, state)
 on_block_complete()
 on_session_loss(attempt)
+on_context_loss(attempt)
 mark_completed()
 ```
 

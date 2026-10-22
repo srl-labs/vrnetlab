@@ -32,7 +32,7 @@ from .features import (
     ValidateProduct,
 )
 from .env import get_env
-from .fos_cli_driver import FOSCliDriver
+from .fos_cli_driver import FOSCliDriver, KernelPanicError
 from .fos_commander import FOSCommander
 from .host_forwarded_bridge import HostForwardedBridge
 from .net_mgmt_strategy import NetMgmtStrategy
@@ -328,6 +328,9 @@ class FortiOS_vm(vrnetlab.VM):
             return False
         try:
             self.driver.process_state()
+        except KernelPanicError:
+            self.stop()
+            raise
         except Exception as error:
             if self._exit_on_bootstrap_error or self.commander.startup_complete:
                 self.stop()

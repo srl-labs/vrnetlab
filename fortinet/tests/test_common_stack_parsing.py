@@ -9,7 +9,9 @@ from unittest.mock import MagicMock
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from fortinet.common.cli_commands import CommandSequence, CommandSpec, SetValue  # noqa: E402
+from fortinet.common.cli_commands import (  # noqa: E402
+    CommandSequence, CommandSpec, ConfigBlock, EditBlock, SetValue,
+)
 from fortinet.common.common import Credentials, FOSCliState  # noqa: E402
 from fortinet.common.features.base import Feature  # noqa: E402
 from fortinet.common.fos_cli_driver import FOSCliDriver  # noqa: E402
@@ -37,6 +39,8 @@ class SerialConnection:
         data = bytes(data)
         self.writes.append(data)
         response = self._responses.get(data)
+        if callable(response):
+            response = response()
         if response:
             chunks = response if isinstance(response, (tuple, list)) else (response,)
             for chunk in chunks:
@@ -147,7 +151,7 @@ class FullStackParsingTests(unittest.TestCase):
     def test_mixed_prompt_context_and_pager_states_reach_feature_callbacks(self):
         responses = {
             b"admin\r": b"Password:",
-            b"secret\r": b"Welcome!\r\nfw #\r\n",
+            b"secret\r": b"Welcome!\r\nfw (global) #\r\n",
             b"get system status\r": (
                 b"fw (global) # get system status\r\n"
                 b"Version: FortiGate-VM64 v7.4.2,build2571\r\n"
@@ -185,6 +189,79 @@ class FullStackParsingTests(unittest.TestCase):
         self.assertIn(b"Serial-Number: FGVMTEST", captured)
         self.assertEqual(feature.executed[0][2], FOSCliState.CMD_PROMPT)
         self.assertEqual(driver._current_state, FOSCliState.CMD_PROMPT)
+
+    def test_aborted_interface_edit_recovers_through_serial_driver(self):
+        ip_responses = iter([
+            b"abort\r\nfw (Interim)#\r\n",
+            b"fw (port1) (Interim)#\r\n",
+        ])
+        responses = {
+            b"admin\r": b"Password:",
+            b"secret\r": b"Welcome!\r\nfw (Interim)#\r\n",
+            b"config system interface\r": b"fw (interface) (Interim)#\r\n",
+            b"edit port1\r": b"fw (port1) (Interim)#\r\n",
+            b"set ip 10.0.52.4/24\r": lambda: next(ip_responses),
+            b"set allowaccess ping https ssh http\r": b"fw (port1) (Interim)#\r\n",
+            b"next\r": b"fw (interface) (Interim)#\r\n",
+            b"end\r": b"fw (Interim)#\r\n",
+        }
+        feature_ref = []
+
+        def configured(commander):
+            feature = RecordingFeature(commander, "management", [
+                ConfigBlock("system interface", [EditBlock("port1", [
+                    "set ip 10.0.52.4/24", "set allowaccess ping https ssh http",
+                ])]),
+            ])
+            feature_ref.append(feature)
+            return [feature]
+
+        connection, terminal, commander, driver = self.make_stack(configured, responses)
+        try:
+            driver.process_state()
+            self.assertTrue(commander.ready)
+            self.assertTrue(feature_ref[0].completed)
+            self.assertEqual(connection.writes, [
+                b"admin\r", b"secret\r",
+                b"config system interface\r", b"edit port1\r", b"set ip 10.0.52.4/24\r",
+                b"config system interface\r", b"edit port1\r", b"set ip 10.0.52.4/24\r",
+                b"set allowaccess ping https ssh http\r", b"next\r", b"end\r",
+            ])
+        finally:
+            terminal.close()
+
+    def test_failed_next_ejects_before_end_through_serial_driver(self):
+        responses = {
+            b"admin\r": b"Password:",
+            b"secret\r": b"Welcome!\r\nfw #\r\n",
+            b"config system interface\r": b"fw (interface)#\r\n",
+            b"edit port1\r": b"fw (port1)#\r\n",
+            b"set unsupported 1\r": b"Command fail. Return code -61.\r\nfw (port1)#\r\n",
+            b"next\r": (
+                b"Command fa", b"il. Return code -5.\r\nfw (port1)#\r\n",
+            ),
+        }
+        feature_ref = []
+
+        def configured(commander):
+            feature = RecordingFeature(commander, "management", [
+                ConfigBlock("system interface", [EditBlock("port1", ["set unsupported 1"])]),
+            ])
+            feature_ref.append(feature)
+            return [feature]
+
+        connection, terminal, commander, driver = self.make_stack(configured, responses)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "'next'.*return code -5"):
+                driver.process_state()
+            self.assertEqual(connection.writes, [
+                b"admin\r", b"secret\r", b"config system interface\r",
+                b"edit port1\r", b"set unsupported 1\r", b"next\r",
+            ])
+            self.assertFalse(feature_ref[0].completed)
+            self.assertFalse(commander.ready)
+        finally:
+            terminal.close()
 
 
 if __name__ == "__main__":

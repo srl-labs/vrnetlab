@@ -12,11 +12,12 @@ from .cli_commands import (
     CommandSequence,
     CommandSpec,
     ConfigBlock,
+    ContextLossAction,
     SessionLossAction,
     flatten_commands,
 )
 from .terminal import Data
-from .common import FOSCliState, TRACE_LEVEL
+from .common import BOOTSTRAP_HOSTNAME_REGEX, FOSCliState, TRACE_LEVEL
 
 DISPATCHABLE_COMPLETION_STATES = {
     FOSCliState.CMD_PROMPT,
@@ -25,6 +26,10 @@ DISPATCHABLE_COMPLETION_STATES = {
 }
 COMMAND_FAILURE_PATTERN = re.compile(
     rb"(?mi)^\s*Command fail\.\s*Return code\s+(-?\d+)"
+)
+CLI_PROMPT_CONTEXT_PATTERN = re.compile(
+    rb"(?m)^[ \t]*" + BOOTSTRAP_HOSTNAME_REGEX
+    + rb"(?P<context>(?:[ \t]+\([^)]+\))*)[ \t]*[#$][ \t]*\r?$"
 )
 
 
@@ -37,6 +42,7 @@ class _StandardOutputContext:
 
 
 class FOSCommander:
+    MAX_COMMAND_RECOVERY_RETRIES = 1
     _CONSOLE_OUTPUT_PATTERN = re.compile(rb"(?mi)^\s*set output (more|standard)\s*\r?$")
     _CONSOLE_INSPECT_LINE = "show full-configuration system console"
     _CONSOLE_STANDARD_LINE = "set output standard"
@@ -67,18 +73,32 @@ class FOSCommander:
         self._pending_feature_error = None
         self._current_state = None
         self._callback_failed = False
+        self._prompt_context = None
+        self._block_prompt_context = None
+        self._recovery_retries = {}
+        self._cleanup_retries = {}
+        self._replay_context_target = None
+        self._context_reset_attempted = False
+        self._in_context_reset = False
 
     def _call_feature(self, callback, *args):
         """Run a feature callback and apply best-effort policy at this boundary."""
         try:
             return callback(*args)
         except Exception as error:
-            if not self._continue_on_error:
-                raise
-            self.logger.exception("Bootstrap feature callback failed")
-            self._pending_feature_error = error
-            self._callback_failed = True
+            self._handle_work_error(error, from_callback=True)
             return None
+
+    def _handle_work_error(self, error, *, from_callback=False):
+        """Apply the configured failure policy after feature/recovery decisions."""
+        if not self._continue_on_error:
+            raise error
+        if from_callback:
+            self.logger.exception("Bootstrap feature callback failed")
+        else:
+            self.logger.error("Bootstrap work failed: %s", error, exc_info=error)
+        self._pending_feature_error = error
+        self._callback_failed = True
 
     def _recover_feature_error(self, *, at_idle_prompt=False):
         error = self._pending_feature_error
@@ -145,6 +165,9 @@ class FOSCommander:
             self._suppression = ExitStack()
 
         self._in_cleanup = False
+        self._replay_context_target = None
+        self._in_context_reset = False
+        self._cleanup_retries.clear()
         self._feature_errors.append((failed_name, str(error)))
         return failed_name
 
@@ -186,6 +209,10 @@ class FOSCommander:
         commands = tuple(flatten_commands(block))
         self._active_commands = commands
         self._pending = deque(commands)
+        self._block_prompt_context = self._prompt_context
+        self._recovery_retries = {}
+        self._replay_context_target = None
+        self._context_reset_attempted = False
 
     def feature_complete(self, feature):
         if feature is not self._active_feature:
@@ -244,6 +271,14 @@ class FOSCommander:
         """Called by the driver for every recognized serial state."""
         self._current_state = state
         self._callback_failed = False
+        if state == FOSCliState.CMD_PROMPT:
+            context = self._extract_prompt_context(output)
+            if context is not None:
+                self._prompt_context = context
+            # Some releases return directly to a usable prompt after login,
+            # without a Welcome banner. The prompt also ends session recovery.
+            self._authenticated_once = True
+            self._recovering = False
         if self._pending_feature_error is not None:
             if state == FOSCliState.CMD_PROMPT:
                 self._recover_feature_error()
@@ -277,9 +312,6 @@ class FOSCommander:
             self._authenticated_once = True
             self._recovering = False
             return
-        if state == FOSCliState.CMD_PROMPT:
-            self._authenticated_once = True
-
         if self._inflight and state in (
             self._inflight.spec.completion_states or (FOSCliState.CMD_PROMPT,)
         ):
@@ -347,7 +379,9 @@ class FOSCommander:
             self._call_feature(self._active_feature.activate)
 
     def _dispatch_next(self):
-        if self._inflight or self._recovering:
+        if self._inflight or self._recovering or self._pending_feature_error is not None:
+            return
+        if not self._restore_replay_context():
             return
         if not self._cleanup and self._active_feature is None:
             self._activate_next_feature()
@@ -356,15 +390,26 @@ class FOSCommander:
         if self._cleanup:
             spec = self._cleanup.popleft()
             self._in_cleanup = True
+            block_index = None
         elif not self._pending:
             self._call_feature(self._active_feature.on_block_complete)
             return
         else:
             spec = self._pending.popleft()
             self._in_cleanup = False
+            block_index = len(self._active_commands) - len(self._pending) - 1
+        self._dispatch_command(spec, block_index)
+
+    def _dispatch_command(self, spec, block_index=None):
         self._attempt_number += 1
         self._inflight = CommandAttempt(spec, self._attempt_number, self._session_epoch)
-        if self._active_feature:
+        self._inflight.prompt_context_before = self._prompt_context
+        self._inflight.block_index = block_index
+        self._inflight.retry_count = (
+            self._cleanup_retries.get(id(spec), 0)
+            if self._in_cleanup else self._recovery_retries.get(block_index, 0)
+        )
+        if self._active_feature and not self._in_context_reset:
             self._call_feature(self._active_feature.on_command_dispatched, self._inflight)
             if self._pending_feature_error is not None:
                 return
@@ -382,8 +427,30 @@ class FOSCommander:
         self._inflight = None
         self._suppression.close()
         self._suppression = ExitStack()
-        self._validate_completion(attempt, state)
+        attempt.prompt_context_after = self._prompt_context
+        if self._in_context_reset:
+            self._in_context_reset = False
+            self._dispatch_next()
+            return
+        if state == FOSCliState.CMD_PROMPT and self._prompt_context_changed(attempt):
+            self._handle_context_loss(attempt)
+            if self._pending_feature_error is not None:
+                self._recover_feature_error()
+            else:
+                self._dispatch_next()
+            return
+        try:
+            self._validate_completion(attempt, state)
+        except RuntimeError as error:
+            if state != FOSCliState.CMD_PROMPT:
+                # An interactive prompt cannot safely advance to another feature.
+                raise
+            self._handle_work_error(error)
+            if self._pending_feature_error is not None:
+                self._recover_feature_error()
+            return
         if self._in_cleanup:
+            self._cleanup_retries.pop(id(attempt.spec), None)
             self._in_cleanup = False
             self._dispatch_next()
             return
@@ -406,11 +473,11 @@ class FOSCommander:
 
     @staticmethod
     def _validate_completion(attempt, state):
-        if attempt.spec.fail_on_error and (
+        if (attempt.spec.closes_scope or attempt.spec.fail_on_error) and (
             failure := COMMAND_FAILURE_PATTERN.search(bytes(attempt.output))
         ):
             raise RuntimeError(
-                "FortiOS command failed "
+                f"FortiOS command {attempt.spec.line!r} failed "
                 f"(return code {failure.group(1).decode()})"
             )
         expected = attempt.spec.expected_completion_state
@@ -419,6 +486,85 @@ class FOSCommander:
                 "CLI command completed at unexpected prompt: "
                 f"expected {expected.name}, received {state.name}"
             )
+
+    def _prompt_context_changed(self, attempt):
+        before = attempt.prompt_context_before
+        after = attempt.prompt_context_after
+        return (
+            before is not None
+            and after is not None
+            and before != after
+            and not self._command_may_change_context(attempt.spec.line)
+        )
+
+    def _handle_context_loss(self, attempt):
+        reason = (
+            "CLI context changed from "
+            f"{self._format_prompt_context(attempt.prompt_context_before)} to "
+            f"{self._format_prompt_context(attempt.prompt_context_after)}"
+        )
+        if self._in_cleanup:
+            self._handle_work_error(RuntimeError(
+                f"{reason} during cleanup {attempt.spec.line!r}; no feature block to replay"
+            ))
+            return
+        action = self._call_feature(self._active_feature.on_context_loss, attempt)
+        if self._pending_feature_error is not None:
+            return
+        if action == ContextLossAction.RESTART_BLOCK:
+            self._restart_active_block(attempt, reason)
+        elif action == ContextLossAction.FAIL:
+            self._handle_work_error(RuntimeError(
+                f"{reason} during {attempt.spec.line!r}; feature declined replay"
+            ))
+        else:
+            self._handle_work_error(ValueError(f"Unsupported context-loss action: {action!r}"))
+
+    def _restore_replay_context(self):
+        """Unwind a surviving partial scope once before replaying its openers."""
+        target = self._replay_context_target
+        if target is None:
+            return True
+        if self._prompt_context == target:
+            self._replay_context_target = None
+            return True
+        if self._context_reset_attempted:
+            self._handle_work_error(RuntimeError(
+                "Unable to restore CLI context before replay: expected "
+                f"{self._format_prompt_context(target)}, received "
+                f"{self._format_prompt_context(self._prompt_context or ())}"
+            ))
+            if self._pending_feature_error is not None:
+                self._recover_feature_error()
+            return False
+        self._context_reset_attempted = True
+        self._in_context_reset = True
+        self._dispatch_command(CommandSpec("abort", suppress_output=True))
+        return False
+
+    @staticmethod
+    def _command_may_change_context(line):
+        command = line.strip().lower()
+        return (
+            command.startswith(("config ", "edit "))
+            or command in {"next", "end", "abort", "exit", "quit"}
+            or command == "set vdom-mode multi-vdom"
+        )
+
+    @staticmethod
+    def _extract_prompt_context(output):
+        data = bytes(output)
+        matches = list(CLI_PROMPT_CONTEXT_PATTERN.finditer(data))
+        if not matches:
+            return None
+        return tuple(
+            item.decode(errors="replace")
+            for item in re.findall(rb"\(([^)]*)\)", matches[-1].group("context"))
+        )
+
+    @staticmethod
+    def _format_prompt_context(context):
+        return " ".join(f"({item})" for item in context) or "<top-level>"
 
     def _is_standard_output_command(self, spec):
         context = self._standard_output_context
@@ -468,7 +614,20 @@ class FOSCommander:
         self._inflight = None
         self._suppression.close()
         self._suppression = ExitStack()
+        if self._in_context_reset:
+            # Login may itself restore the target scope. The pending replay
+            # stays bounded by the original command's recovery allowance.
+            self._in_context_reset = False
+            return
         if self._in_cleanup:
+            retries = self._cleanup_retries.get(id(attempt.spec), 0)
+            if retries >= self.MAX_COMMAND_RECOVERY_RETRIES:
+                self._handle_work_error(RuntimeError(
+                    f"Session lost repeatedly during cleanup {attempt.spec.line!r}; "
+                    "retry limit reached"
+                ))
+                return
+            self._cleanup_retries[id(attempt.spec)] = retries + 1
             self._cleanup.appendleft(attempt.spec)
             self._in_cleanup = False
             return
@@ -483,20 +642,35 @@ class FOSCommander:
             f"Session lost during {self._active_feature.name}/{attempt.spec.line!r}; {action.name.lower()}"
         )
         action_handlers = {
-            SessionLossAction.RESTART_BLOCK: lambda: self._restart_active_block(),
+            SessionLossAction.RESTART_BLOCK: lambda: self._restart_active_block(
+                attempt, "session lost"
+            ),
             SessionLossAction.COMPLETE_BLOCK: lambda: self._pending.clear(),
             SessionLossAction.CONTINUE: lambda: self._pending.clear(),
-            SessionLossAction.FAIL: lambda: self._raise_session_loss(attempt),
+            SessionLossAction.FAIL: lambda: self._handle_work_error(
+                RuntimeError(f"Session lost during {attempt.spec.line!r}")
+            ),
             SessionLossAction.VALIDATE: lambda: self._pending.clear(),
         }
         action_handlers[action]()
 
-    def _restart_active_block(self):
+    def _restart_active_block(self, attempt, reason):
+        retries = self._recovery_retries.get(attempt.block_index, 0)
+        if retries >= self.MAX_COMMAND_RECOVERY_RETRIES:
+            self._handle_work_error(RuntimeError(
+                f"{reason} repeatedly during {attempt.spec.line!r}; "
+                f"retry limit reached ({self.MAX_COMMAND_RECOVERY_RETRIES})"
+            ))
+            return
+        self._recovery_retries[attempt.block_index] = retries + 1
         self._pending = deque(self._active_commands)
-
-    @staticmethod
-    def _raise_session_loss(attempt):
-        raise RuntimeError(f"Session lost during {attempt.spec.line!r}")
+        self._replay_context_target = self._block_prompt_context
+        self._context_reset_attempted = False
+        self.logger.warning(
+            "%s during %s/%r; replaying block (command recovery %d/%d)",
+            reason, self._active_feature.name, attempt.spec.line,
+            retries + 1, self.MAX_COMMAND_RECOVERY_RETRIES,
+        )
 
     def enqueue_runtime_feature(self, feature):
         return self.enqueue_runtime_features([feature])

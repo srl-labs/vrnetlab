@@ -12,7 +12,10 @@ REPO_ROOT = __import__("pathlib").Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from fortinet.common.common import Credentials, FOSCliState  # noqa: E402
-from fortinet.common.fos_cli_driver import FOSCliDriver  # noqa: E402
+from fortinet.common.fos_cli_driver import (  # noqa: E402
+    FOSCliDriver,
+    KernelPanicError,
+)
 from fortinet.common.terminal import Data, Terminal, _ByteQueue, terminal_buffer_limit_bytes  # noqa: E402
 
 
@@ -220,6 +223,33 @@ class DriverTests(unittest.TestCase):
         terminal.expect.return_value = (-1, None, Data(b""))
         self.assertEqual(driver._next_state()[0], FOSCliState.TN_TIMEOUT)
         driver._handle_state(FOSCliState.CREDENTIAL_REJECTED)
+
+    def test_kernel_panic_requires_kernel_diagnostic_and_raises(self):
+        driver, terminal, commander, *_ = self.make_driver()
+        pattern = driver.state_patterns[FOSCliState.KERNEL_PANIC.value]
+        panic = (
+            b"Kernel panic - not syncing: VFS: Unable to mount root fs\r\n"
+            b"CPU: 0 PID: 1 Comm: swapper/0 Not tainted 4.19.13 #1\r\n"
+        )
+
+        self.assertIsNone(
+            re.search(
+                pattern,
+                b"Kernel panic - not syncing: VFS: Unable to mount root fs",
+            )
+        )
+        match = re.search(pattern, panic)
+        self.assertIsNotNone(match)
+        terminal.expect.return_value = (
+            FOSCliState.KERNEL_PANIC.value,
+            match,
+            Data(panic),
+        )
+
+        with self.assertRaisesRegex(KernelPanicError, "Kernel panic detected"):
+            driver.process_state()
+
+        commander.on_state.assert_called_once_with(FOSCliState.KERNEL_PANIC, Data(panic))
 
 
 if __name__ == "__main__":
