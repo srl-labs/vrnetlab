@@ -3,8 +3,10 @@ import datetime
 import logging
 import os
 import re
+import select
 import signal
 import sys
+import time
 
 import vrnetlab
 from scrapli.driver.core import IOSXEDriver
@@ -83,33 +85,80 @@ class VIOS_vm(vrnetlab.VM):
         self.running = False
         self.spins = 0
 
+    def start(self):
+        super().start()
+        if self.running:
+            return
+        self._console_socket()
+        self._bootstrap_buffer = b""
+        self._last_output = time.monotonic()
+        self._last_nudge = self._last_output
+        self._nudge_armed = False
+        self._nudge_count = 0
+
+    def _console_socket(self):
+        transport = self.scrapli_tn.transport
+        sock = getattr(getattr(transport, "socket", None), "sock", None)
+        if sock is None:
+            raise RuntimeError("vIOS bootstrap requires an open scrapli telnet socket")
+        return sock
+
+    def _read_console(self):
+        # Poll like common._Console, but never fall back to a blocking read.
+        transport = self.scrapli_tn.transport
+        sock = self._console_socket()
+        pending = getattr(transport, "_raw_buf", b"") or getattr(transport, "_cooked_buf", b"")
+        if not pending:
+            readable, _, _ = select.select([sock], [], [], 1)
+            if not readable:
+                return b""
+        # Readiness can mean only telnet negotiation, without console text.
+        # Keep a second recv in scrapli from blocking in that case.
+        timeout = sock.gettimeout()
+        try:
+            sock.setblocking(False)
+            return self.scrapli_tn.channel.read()
+        except BlockingIOError:
+            return b""
+        finally:
+            sock.settimeout(timeout)
+
     def bootstrap_spin(self):
-        if self.spins > 300:
-            # too many spins with no result -> give up
-            self.stop()
-            self.start()
+        if self.running:
             return
 
-        # Expect different prompt based on device type
+        res = self._read_console()
+        now = time.monotonic()
+        if res:
+            self.write_to_stdout(res)
+            self._last_output = now
+            self._bootstrap_buffer += res
+
+        # Expect different prompt based on device type.
         device_prompt = b"Switch>" if self.device_type == "switch" else b"Router>"
-
-        (ridx, match, res) = self.con_expect(
-            [
-                rb"Would you like to enter the initial configuration dialog\? \[yes/no\]:",
-                b"Press RETURN to get started!",
-                device_prompt,
-            ],
-        )
-
-        if match:
+        patterns = [
+            rb"Would you like to enter the initial configuration dialog\? \[yes/no\]:",
+            b"Press RETURN to get started!",
+            device_prompt,
+        ]
+        while self._bootstrap_buffer:
+            matches = [(match.start(), ridx, match) for ridx, pattern in enumerate(patterns)
+                       if (match := re.search(pattern, self._bootstrap_buffer))]
+            if not matches:
+                break
+            _, ridx, match = min(matches, key=lambda item: item[:2])
+            self._bootstrap_buffer = self._bootstrap_buffer[match.end():]
             if ridx == 0:
                 self.logger.info("Skipping initial configuration dialog")
                 self.wait_write("no", wait=None)
+                self._nudge_armed = True
             elif ridx == 1:
                 self.logger.info("Entering user EXEC mode")
+                self._nudge_armed = True
                 for _ in range(3):
                     self.wait_write("\r", wait=None)
             elif ridx == 2:
+                self._nudge_armed = False
                 self.apply_config()
 
                 # startup time
@@ -119,15 +168,19 @@ class VIOS_vm(vrnetlab.VM):
                 self.running = True
                 return
 
-        # no match, if we saw some output from the router it's probably
-        # booting, so let's give it some more time
-        if res != b"":
-            self.write_to_stdout(res)
-            # reset spins if we saw some output
-            self.spins = 0
+        self._bootstrap_buffer = self._bootstrap_buffer[-4096:]
+        if now - self._last_output >= 900:
+            self.logger.warning("No console output for 900 seconds; restarting")
+            self.stop()
+            self.start()
+            return
 
-        self.spins += 1
-        return
+        if (self._nudge_armed and self._nudge_count < 6
+                and now - max(self._last_output, self._last_nudge) >= 20):
+            self._nudge_count += 1
+            self.logger.info(f"Nudging console with RETURN ({self._nudge_count}/6)")
+            self.wait_write("\r", wait=None)
+            self._last_nudge = now
 
     def apply_config(self):
         scrapli_timeout = vrnetlab.getenv_uint("SCRAPLI_TIMEOUT", vrnetlab.DEFAULT_SCRAPLI_TIMEOUT)
