@@ -171,22 +171,10 @@ do reload
         crypto_key = "crypto key generate rsa modulus 2048\n!" if is_autonomous else "!"
         login_local = "login local" if is_autonomous else "!"
 
-        config = f"""hostname {self.hostname}
-username {self.username} privilege 15 password {self.password}
-ip domain name example.com
-!
-{crypto_key}
-line con 0
-logging synchronous
-!
-line vty 0 4
-logging synchronous
-{login_local}
-transport input all
-!
-ipv6 unicast-routing
-!
-vrf definition {vrf_name}
+        # Skip mgmt VRF and interface config when there is no mgmt interface
+        mgmt_config = "!"
+        if os.path.exists(f"/sys/class/net/{self.mgmt_intf}"):
+            mgmt_config = f"""vrf definition {vrf_name}
 description {vrf_description}
 address-family ipv4
 exit
@@ -203,7 +191,24 @@ vrf forwarding {vrf_name}
 ip address {v4_mgmt_address[0]} {v4_mgmt_address[1]}
 {ipv6_address}
 no shut
-exit
+exit"""
+
+        config = f"""hostname {self.hostname}
+username {self.username} privilege 15 password {self.password}
+ip domain name example.com
+!
+{crypto_key}
+line con 0
+logging synchronous
+!
+line vty 0 4
+logging synchronous
+{login_local}
+transport input all
+!
+ipv6 unicast-routing
+!
+{mgmt_config}
 !
 restconf
 netconf-yang
