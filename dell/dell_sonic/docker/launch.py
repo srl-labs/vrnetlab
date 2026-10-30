@@ -140,11 +140,17 @@ class Dell_Sonic_VM(vrnetlab.VM):
             f"Startup config file {CONFIG_FILE} found, copying it to the VM"
         )
 
-        subprocess.run(
-            f"/backup.sh -u {self.username} -p {self.password} restore",
-            check=True,
-            shell=True,
-        )
+        try:
+            subprocess.run(
+                f"/backup.sh -u {self.username} -p {self.password} restore",
+                check=True,
+                shell=True,
+            )
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to apply startup config {CONFIG_FILE}: {e} Aborting startup."
+            )
+            sys.exit(1)
 
 
 class Dell_SONiC(vrnetlab.VR):
