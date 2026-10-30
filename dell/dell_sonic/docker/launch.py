@@ -20,6 +20,8 @@ MGMT_READY_TIMEOUT = 300
 PROMPT_TIMEOUT = 120
 # Bound on waiting for hostcfgd to apply a CONFIG_DB hostname change.
 HOSTCFGD_TIMEOUT = 20
+# Bound on the shell prompt or "Login incorrect" after sending a password.
+LOGIN_TIMEOUT = 60
 
 
 def sshd_ipv4_listener_cmd(dropin=SSHD_DROPIN):
@@ -168,12 +170,7 @@ class Dell_Sonic_VM(vrnetlab.VM):
         if match and ridx == 0:  # login
             self.logger.info("VM started")
 
-            # Login
-            self.wait_write("\r", None)
-            self.wait_write(DEFAULT_USER, wait="login:")
-            self.wait_write(DEFAULT_PASSWORD, wait="Password:")
-            self.wait_write("", wait="%s@" % (self.username))
-            self.logger.info("Login completed")
+            self.console_login()
 
             # run main config!
             self.bootstrap_config()
@@ -197,6 +194,42 @@ class Dell_Sonic_VM(vrnetlab.VM):
         self.spins += 1
 
         return
+
+    def console_login(self):
+        """Log in on the serial console.
+
+        A fresh disk has the factory password. A disk reused across a
+        container restart already has the configured password, so retry
+        with it after "Login incorrect". Exit if neither works.
+        """
+        passwords = [DEFAULT_PASSWORD]
+        if self.password != DEFAULT_PASSWORD:
+            passwords.append(self.password)
+        prompt = f"{DEFAULT_USER}@".encode()
+        self.wait_write("\r", None)
+        self.wait_write(DEFAULT_USER, wait="login:")
+        for i, password in enumerate(passwords):
+            if i:
+                self.logger.info("Console login incorrect, trying the next password")
+                # Type nothing ahead: wait for the guest's own login prompt.
+                if b"login:" not in rest:
+                    rest = self.tn.read_until(b"login:", LOGIN_TIMEOUT)
+                    if b"login:" not in rest:
+                        break
+                self.wait_write(DEFAULT_USER, wait=None)
+            self.wait_write(password, wait="Password:")
+            ridx, match, buf = self.tn.expect(
+                [prompt, b"Login incorrect"], LOGIN_TIMEOUT
+            )
+            if match and ridx == 0:
+                self.wait_write("", None)
+                self.logger.info("Login completed")
+                return
+            if not match:
+                break
+            rest = buf.decode(errors="ignore")[match.end() :].encode()
+        self.logger.error("Console login failed, aborting startup")
+        sys.exit(1)
 
     def bootstrap_config(self):
         """Do the actual bootstrap config"""
