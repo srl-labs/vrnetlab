@@ -41,7 +41,7 @@ This is needed because on the SONiC 4.6 VM `hostname-config` runs before the sta
 
 - The SONiC 4.6 KVM guest does not come back from an in-guest reboot (`reboot` or `systemctl reboot`); this also happens with an unmodified launcher. Recreate the node instead.
 - The launcher bootstraps the guest once. It does not re-run the bootstrap after a guest reboot, so settings applied at startup but not saved in the guest (management address and route on 4.6, the hostname without a startup config) are not reapplied.
-- Restarting the container (`docker restart`) is not supported. Recreate the node instead.
+- Restarting the container (`docker restart`) reuses the existing disk overlay, so the guest keeps its disk state. The launcher logs in with the factory password and, after `Login incorrect`, with the configured password, then runs the bootstrap and startup config load again. This works on SONiC 4.1. A SONiC 4.6 guest does not finish booting from a reused disk, as after an in-guest reboot, so recreate 4.6 nodes instead. Under Containerlab, a restarted container does not get its data links back; recreate the node.
 
 ## Running tests
 
