@@ -146,11 +146,7 @@ logging.Logger.trace = trace
 
 class Dell_Sonic_VM(vrnetlab.VM):
     def __init__(self, hostname, username, password, conn_mode):
-        disk_image = "/"
-        for e in os.listdir("/"):
-            if re.search(".qcow2$", e):
-                disk_image = "/" + e
-                break
+        disk_image = vrnetlab.find_disk_image()
         super(Dell_Sonic_VM, self).__init__(
             username, password, disk_image=disk_image, ram=4096, smp="2"
         )
