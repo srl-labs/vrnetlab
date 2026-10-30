@@ -195,7 +195,7 @@ echo "port 22"
         self.assertFalse(self.dropin.exists())
         self.assertEqual(self.calls(), "")
 
-    def stub_state(self, link, listener, db):
+    def stub_state(self, link, listener, config_setup, db_init):
         write_exe(
             self.bin / "ip",
             f'#!/bin/sh\necho "2: eth0: <UP> mtu 1500 state {link} mode DEFAULT"\n',
@@ -205,16 +205,40 @@ echo "port 22"
             self.bin / "ss",
             f'#!/bin/sh\necho "LISTEN 0 128 [::]:22 [::]:*"\necho "{ss_line}"\n',
         )
-        write_exe(self.bin / "sonic-db-cli", f'#!/bin/sh\necho "{db}"\n')
+        # Stub systemctl: only "is-active ... config-setup" reports config_setup.
+        write_exe(
+            self.bin / "systemctl",
+            f"""#!/bin/sh
+case "$*" in
+    is-active*config-setup*) [ "{config_setup}" = active ] && exit 0; exit 3 ;;
+esac
+exit 1
+""",
+        )
+        # Stub sonic-db-cli: only "CONFIG_DB GET CONFIG_DB_INITIALIZED" is answered.
+        write_exe(
+            self.bin / "sonic-db-cli",
+            f"""#!/bin/sh
+[ "$*" = "CONFIG_DB GET CONFIG_DB_INITIALIZED" ] && echo "{db_init}"
+exit 0
+""",
+        )
         write_exe(self.bin / "sleep", "#!/bin/sh\nexit 0\n")
 
     def test_wait_reports_ready_when_guest_ready(self):
-        self.stub_state("UP", True, "PONG")
+        self.stub_state("UP", True, "active", "1")
         res = self.run_sh(launch.mgmt_ready_cmd(timeout=5))
         self.assertEqual(res.stdout.strip(), "MGMT_READY")
 
-    def test_wait_reports_timeout_without_ipv4_listener(self):
-        for state in (("UP", False, "PONG"), ("DOWN", True, "PONG"), ("UP", True, "")):
+    def test_wait_reports_timeout_until_every_condition_holds(self):
+        for state in (
+            ("UP", False, "active", "1"),
+            ("DOWN", True, "active", "1"),
+            # config-setup still reloading CONFIG_DB (observed race on 4.6)
+            ("UP", True, "activating", "1"),
+            ("UP", True, "active", "0"),
+            ("UP", True, "active", ""),
+        ):
             with self.subTest(state=state):
                 self.stub_state(*state)
                 res = self.run_sh(launch.mgmt_ready_cmd(timeout=1))

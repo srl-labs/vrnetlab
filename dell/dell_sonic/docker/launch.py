@@ -32,14 +32,19 @@ def sshd_ipv4_listener_cmd(dropin=SSHD_DROPIN):
 
 
 def mgmt_ready_cmd(timeout=MGMT_READY_TIMEOUT):
-    """Poll until eth0 is up, sshd listens on IPv4 and CONFIG_DB answers.
+    """Poll until eth0 is up, sshd listens on IPv4 and CONFIG_DB is initialized.
 
+    The console login can appear while config-setup is still reloading
+    CONFIG_DB; "config load" then fails its PORT table check. Wait for the
+    config-setup oneshot to finish and CONFIG_DB_INITIALIZED, the flag SONiC's
+    own swss/syncd start scripts wait on.
     The printf arguments keep the echoed command from matching the marker.
     """
     checks = (
         'ip link show eth0 | grep -q "state UP"'
         ' && ss -Hltn "sport = :22" | grep -q "0.0.0.0:22"'
-        " && sonic-db-cli PING | grep -q PONG"
+        " && systemctl is-active --quiet config-setup"
+        ' && [ "$(sonic-db-cli CONFIG_DB GET CONFIG_DB_INITIALIZED)" = 1 ]'
     )
     return (
         f"timeout {timeout} sh -c 'until {checks}; do sleep 1; done'"
@@ -180,16 +185,18 @@ class Dell_Sonic_VM(vrnetlab.VM):
 
     def wait_mgmt_ready(self):
         """Wait for the guest state the SSH-based startup loader depends on."""
-        self.logger.info("waiting for management interface and IPv4 SSH")
+        self.logger.info(
+            "waiting for management interface, IPv4 SSH and CONFIG_DB initialization"
+        )
         self.wait_write(mgmt_ready_cmd(), "#")
         ridx, match, _ = self.tn.expect(
             [b"MGMT_READY", b"MGMT_TIMEOUT"], MGMT_READY_TIMEOUT + 30
         )
         if match and ridx == 0:
-            self.logger.info("management interface and IPv4 SSH are ready")
+            self.logger.info("management interface, IPv4 SSH and CONFIG_DB are ready")
         else:
             self.logger.warning(
-                "management interface or IPv4 SSH not ready after "
+                "management interface, IPv4 SSH or CONFIG_DB not ready after "
                 f"{MGMT_READY_TIMEOUT}s; SSH-based startup config loading may fail"
             )
 
