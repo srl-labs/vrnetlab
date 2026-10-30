@@ -13,6 +13,38 @@ import vrnetlab
 CONFIG_FILE = "/config/config_db.json"
 DEFAULT_USER = "admin"
 DEFAULT_PASSWORD = "YourPaSsWoRd"
+SSHD_DROPIN = "/etc/ssh/sshd_config.d/vrnetlab-ipv4.conf"
+MGMT_READY_TIMEOUT = 300
+
+
+def sshd_ipv4_listener_cmd(dropin=SSHD_DROPIN):
+    """Add an IPv4 sshd listener via a drop-in, only if sshd lacks one.
+
+    The wrapper forwards IPv4 port 22 to the guest. SONiC 4.6 can boot with
+    sshd listening only on [::] (V6ONLY); older images already listen on IPv4
+    and are left untouched.
+    """
+    return (
+        "sshd -T 2>/dev/null | grep -q '^listenaddress 0\\.0\\.0\\.0:' || "
+        f"{{ echo 'ListenAddress 0.0.0.0' > {dropin} && "
+        "systemctl try-reload-or-restart ssh; }"
+    )
+
+
+def mgmt_ready_cmd(timeout=MGMT_READY_TIMEOUT):
+    """Poll until eth0 is up, sshd listens on IPv4 and CONFIG_DB answers.
+
+    The printf arguments keep the echoed command from matching the marker.
+    """
+    checks = (
+        'ip link show eth0 | grep -q "state UP"'
+        ' && ss -Hltn "sport = :22" | grep -q "0.0.0.0:22"'
+        " && sonic-db-cli PING | grep -q PONG"
+    )
+    return (
+        f"timeout {timeout} sh -c 'until {checks}; do sleep 1; done'"
+        " && printf '%s_%s\\n' MGMT READY || printf '%s_%s\\n' MGMT TIMEOUT"
+    )
 
 
 def handle_SIGCHLD(_signal, _frame):
@@ -103,17 +135,7 @@ class Dell_Sonic_VM(vrnetlab.VM):
         self.logger.info("applying bootstrap configuration")
         self.wait_write("sudo -i", "$")
 
-        # set ipv4/6 address of the management interface if it is not managed by dhcp
-        if not self.mgmt_address_ipv4 == "dhcp":
-            self.wait_write(
-                f"sudo /usr/sbin/ip address add {self.mgmt_address_ipv4} dev eth0", "#"
-            )
-        if self.mgmt_address_ipv6 and self.mgmt_address_ipv6 != "dhcp":
-            # note, v6 address is not being applied for whatever reason
-            self.wait_write(
-                f"sudo /usr/sbin/ip -6 address add {self.mgmt_address_ipv6} dev eth0",
-                "#",
-            )
+        self.bootstrap_mgmt()
         self.wait_write("passwd -q %s" % (self.username))
         self.wait_write(self.password, "New password:")
         self.wait_write(self.password, "password:")
@@ -124,8 +146,52 @@ class Dell_Sonic_VM(vrnetlab.VM):
             f'sudo sed -i \'s/"hostname": "sonic",/"hostname": "{self.hostname}",/g\' /etc/sonic/config_db.json',
             "#",
         )
+        self.wait_mgmt_ready()
         self.wait_write("logout", "#")
         self.logger.info("completed bootstrap configuration")
+
+    def bootstrap_mgmt(self):
+        """Bring up management (address, link, default route, IPv4 sshd).
+
+        SONiC's own path (interfaces-config/hostcfgd) may not have configured
+        eth0 by the time the console login appears, so apply the wrapper's
+        management settings directly. Nothing is written to CONFIG_DB, so a
+        startup config loaded later keeps its own MGMT_* settings.
+        """
+        if self.mgmt_address_ipv4 != "dhcp":
+            self.wait_write(
+                f"ip address replace {self.mgmt_address_ipv4} dev eth0", "#"
+            )
+        if self.mgmt_address_ipv6 and self.mgmt_address_ipv6 != "dhcp":
+            # note, v6 address is not being applied for whatever reason
+            self.wait_write(
+                f"ip -6 address replace {self.mgmt_address_ipv6} dev eth0", "#"
+            )
+        self.wait_write("ip link set eth0 up", "#")
+        if self.mgmt_gw_ipv4 and self.mgmt_gw_ipv4 != "dhcp":
+            self.wait_write(
+                f"ip route replace default via {self.mgmt_gw_ipv4} dev eth0", "#"
+            )
+        if self.mgmt_gw_ipv6 and self.mgmt_gw_ipv6 != "dhcp":
+            self.wait_write(
+                f"ip -6 route replace default via {self.mgmt_gw_ipv6} dev eth0", "#"
+            )
+        self.wait_write(sshd_ipv4_listener_cmd(), "#")
+
+    def wait_mgmt_ready(self):
+        """Wait for the guest state the SSH-based startup loader depends on."""
+        self.logger.info("waiting for management interface and IPv4 SSH")
+        self.wait_write(mgmt_ready_cmd(), "#")
+        ridx, match, _ = self.tn.expect(
+            [b"MGMT_READY", b"MGMT_TIMEOUT"], MGMT_READY_TIMEOUT + 30
+        )
+        if match and ridx == 0:
+            self.logger.info("management interface and IPv4 SSH are ready")
+        else:
+            self.logger.warning(
+                "management interface or IPv4 SSH not ready after "
+                f"{MGMT_READY_TIMEOUT}s; SSH-based startup config loading may fail"
+            )
 
     def startup_config(self):
         """Load additional config provided by user."""
