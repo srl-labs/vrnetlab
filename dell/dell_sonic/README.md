@@ -33,9 +33,15 @@ The hostname is chosen as follows:
 
 If the chosen name is not a valid SONiC hostname, or the startup config cannot be read, the launcher logs a warning. An invalid hostname is not applied. An unreadable startup config falls back to the node name, and loading it then fails as usual.
 
-After the readiness wait, which also waits for the boot-time `hostname-config` unit to finish, the launcher writes the hostname to CONFIG_DB (`DEVICE_METADATA|localhost`). If `hostcfgd` is running, it applies the change itself. Otherwise the launcher applies it to `/etc/hostname`, the kernel hostname, and a `127.0.0.1 <hostname>` entry in `/etc/hosts`. These are the same steps SONiC's own `hostname-config` and `hostcfgd` use, and running after them avoids a duplicate `/etc/hosts` entry. Other `/etc/hosts` entries are kept, and repeated runs do not add duplicate entries. If `/etc/sonic/config_db.json` already exists (older images), its hostname is updated too. The file is not created when it is absent; a supplied startup config is saved to it by the loader.
+After the readiness wait, which also waits for the boot-time `hostname-config` unit to finish, the launcher writes the hostname to CONFIG_DB (`DEVICE_METADATA|localhost`). If `hostcfgd` is running (older images), the launcher waits up to 20 seconds for it to apply the change. `hostcfgd` ignores a change that arrives while it is still starting, so if the live hostname does not match by then, or `hostcfgd` is not running, the launcher applies it to `/etc/hostname`, the kernel hostname, and a `127.0.0.1 <hostname>` entry in `/etc/hosts`. These are the same steps SONiC's own `hostname-config` and `hostcfgd` use, and running after them avoids a duplicate `/etc/hosts` entry. Other `/etc/hosts` entries are kept, and repeated runs do not add duplicate entries. If `/etc/sonic/config_db.json` already exists (older images), its hostname is updated too. The file is not created when it is absent, because creating it would change the next boot (for example, disable ZTP); a supplied startup config is saved to it by the loader. Without a startup config, the hostname therefore reverts to the factory default after a guest reboot.
 
 This is needed because on the SONiC 4.6 VM `hostname-config` runs before the startup config is loaded and `hostcfgd` does not run, so loading a new hostname into CONFIG_DB would not change the live hostname. Setting only the live hostname (for example with `hostnamectl`) is not enough either, because SONiC re-applies the CONFIG_DB hostname.
+
+## Known limitations
+
+- The SONiC 4.6 KVM guest does not come back from an in-guest reboot (`reboot` or `systemctl reboot`); this also happens with an unmodified launcher. Recreate the node instead.
+- The launcher bootstraps the guest once. It does not re-run the bootstrap after a guest reboot, so settings applied at startup but not saved in the guest (management address and route on 4.6, the hostname without a startup config) are not reapplied.
+- Restarting the container (`docker restart`) is not supported. Recreate the node instead.
 
 ## Running tests
 

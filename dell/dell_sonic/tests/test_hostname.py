@@ -109,6 +109,9 @@ if [ "$1" = -F ]; then cat "$2" > "{self.kernel}"; else cat "{self.kernel}"; fi
 """,
         )
         write_exe(self.bin / "sonic-db-cli", f'#!/bin/sh\necho "$*" >> "{self.db}"\n')
+        write_exe(
+            self.bin / "sleep", f'#!/bin/sh\necho "$1" >> "{self.tmp}/sleep.log"\n'
+        )
         self.hostcfgd = "inactive"
         write_exe(
             self.bin / "systemctl",
@@ -211,20 +214,55 @@ exit 3
         self.assertEqual(self.leaf_entries("leaf1"), 1)
         self.assertNotIn("127.0.0.1 sonic", self.hosts.read_text())
 
-    def test_hostcfgd_running_applies_hostname_itself(self):
-        # Older images: hostcfgd reacts to the CONFIG_DB change and appends
-        # its own entry, so the launcher only writes CONFIG_DB.
+    def hostcfgd_applies_on_hset(self):
+        """Make the CONFIG_DB write trigger hostcfgd's handler, as it does
+        once hostcfgd has subscribed to DEVICE_METADATA."""
+        k, f, h = self.kernel, self.hostname_file, self.hosts
+        apply = (
+            f'eval "H=\\$$#"; O="$(cat "{k}")"; echo "$H" > "{f}"; '
+            f'cp "{f}" "{k}"; sed -i "/\\s$O\\$/d" "{h}"; '
+            f'echo "127.0.0.1 $H" >> "{h}"'
+        )
+        write_exe(
+            self.bin / "sonic-db-cli",
+            f'#!/bin/sh\necho "$*" >> "{self.db}"\n{apply}\n',
+        )
+
+    def test_hostcfgd_applying_hostname_is_left_to_it(self):
         (self.tmp / "hostcfgd").touch()
-        before = self.hosts.read_text()
+        self.hostcfgd_applies_on_hset()
         res = self.run_cmd("leaf1")
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn(
-            "HSET DEVICE_METADATA|localhost hostname leaf1", self.db.read_text()
-        )
-        self.assertEqual(self.hosts.read_text(), before)
-        self.assertEqual(self.kernel.read_text().strip(), "sonic")
-        self.sonic_apply("sonic", "leaf1")
+        self.assertIn("hostcfgd applied the hostname", res.stdout)
+        self.assertEqual(self.kernel.read_text().strip(), "leaf1")
         self.assertEqual(self.leaf_entries("leaf1"), 1)
+        self.assertNotIn("127.0.0.1 sonic", self.hosts.read_text())
+
+    def test_hostcfgd_not_applying_hostname_falls_back_to_live_steps(self):
+        # hostcfgd read the new name while initializing (or missed the
+        # change), so its handler sees no change and never applies it.
+        (self.tmp / "hostcfgd").touch()
+        res = self.run_cmd("leaf1")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.kernel.read_text().strip(), "leaf1")
+        self.assertEqual(self.hostname_file.read_text(), "leaf1\n")
+        self.assertEqual(self.leaf_entries("leaf1"), 1)
+        self.assertNotIn("127.0.0.1 sonic", self.hosts.read_text())
+
+    def test_hostcfgd_wait_is_bounded(self):
+        (self.tmp / "hostcfgd").touch()
+        self.run_cmd("leaf1")
+        sleeps = (self.tmp / "sleep.log").read_text().split()
+        self.assertEqual(len(sleeps), launch.HOSTCFGD_TIMEOUT)
+
+    def test_no_hostcfgd_wait_without_hostcfgd(self):
+        self.run_cmd("leaf1")
+        self.assertFalse((self.tmp / "sleep.log").exists())
+
+    def test_snippet_has_no_prompt_character(self):
+        # The next prompt wait reads up to "#"; the echoed command must not
+        # contain one.
+        self.assertNotIn("#", launch.hostname_cmd("leaf1"))
 
     def test_rejects_unsafe_hostname(self):
         for name in ("a b", "x;rm -rf /", "$(id)", "-lead", "a_b", ""):

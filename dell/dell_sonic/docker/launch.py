@@ -18,6 +18,8 @@ SSHD_DROPIN = "/etc/ssh/sshd_config.d/vrnetlab-ipv4.conf"
 MGMT_READY_TIMEOUT = 300
 # Bound on each console prompt wait after the readiness check.
 PROMPT_TIMEOUT = 120
+# Bound on waiting for hostcfgd to apply a CONFIG_DB hostname change.
+HOSTCFGD_TIMEOUT = 20
 
 
 def sshd_ipv4_listener_cmd(dropin=SSHD_DROPIN):
@@ -74,16 +76,20 @@ def hostname_cmd(
     hostname_file="/etc/hostname",
     hosts_file="/etc/hosts",
     config_db="/etc/sonic/config_db.json",
+    timeout=HOSTCFGD_TIMEOUT,
 ):
     """Set the hostname in CONFIG_DB and apply it to the live system.
 
     Mirrors SONiC's hostname-config.sh/hostcfgd (/etc/hostname, hostname -F,
     a "127.0.0.1 <name>" hosts entry). hostname-config runs once at boot (the
     readiness wait orders us after it) and hostcfgd does not run on the 4.6
-    VM. Where hostcfgd runs, it reacts to the CONFIG_DB change and appends its
-    own hosts entry, so only CONFIG_DB is written. Writing CONFIG_DB first
-    means SONiC agrees with the live hostname instead of resetting it later. The saved config is only
-    updated if it exists; it is not created here.
+    VM. Where hostcfgd runs, it applies the CONFIG_DB change only if it has
+    subscribed and its cached hostname differs; a write that lands while it
+    initializes is cached and never applied. So wait (bounded) for hostcfgd
+    to apply it, and apply the live steps only if it did not, so its own
+    hosts entry is not duplicated. Writing CONFIG_DB first means SONiC agrees
+    with the live hostname instead of resetting it later. The saved config is
+    only updated if it exists; it is not created here.
     """
     if not valid_hostname(hostname):
         raise ValueError(f"invalid hostname {hostname!r}")
@@ -96,10 +102,13 @@ def hostname_cmd(
         'shutil.copymode(p,t);os.replace(t,p)"'
     )
     return (
-        f'H={hostname}; O="$(hostname)"; '
+        f'H={hostname}; O="$(hostname)"; A=; '
         "sonic-db-cli CONFIG_DB HSET 'DEVICE_METADATA|localhost' hostname \"$H\" >/dev/null; "
-        "if systemctl is-active --quiet hostcfgd; then "
-        "echo 'hostcfgd applies the hostname'; else "
+        "if systemctl is-active --quiet hostcfgd; then i=0; "
+        f'until [ "$(hostname)" = "$H" ] || [ $i -ge {timeout} ]; do '
+        "sleep 1; i=$((i+1)); done; "
+        '[ "$(hostname)" = "$H" ] && A=1; fi; '
+        "if [ -n \"$A\" ]; then echo 'hostcfgd applied the hostname'; else "
         f'echo "$H" > {hostname_file} && hostname -F {hostname_file}; '
         'awk -v o="$O" -v h="$H" \'!($1 == "127.0.0.1" && NF == 2 && '
         '($2 == h || ($2 == o && o != "localhost")))\' '
