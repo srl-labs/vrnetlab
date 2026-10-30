@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import datetime
+import json
 import logging
 import os
 import re
@@ -49,6 +50,54 @@ def mgmt_ready_cmd(timeout=MGMT_READY_TIMEOUT):
     return (
         f"timeout {timeout} sh -c 'until {checks}; do sleep 1; done'"
         " && printf '%s_%s\\n' MGMT READY || printf '%s_%s\\n' MGMT TIMEOUT"
+    )
+
+
+def valid_hostname(hostname):
+    """SONiC's own hostname rule (config hostname/hostcfgd).
+
+    Also guarantees the name is safe to embed in a shell command.
+    """
+    if not isinstance(hostname, str) or not hostname or len(hostname) > 253:
+        return False
+    label = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)")
+    return all(label.fullmatch(x) for x in hostname.split("."))
+
+
+def hostname_cmd(
+    hostname,
+    hostname_file="/etc/hostname",
+    hosts_file="/etc/hosts",
+    config_db="/etc/sonic/config_db.json",
+):
+    """Set the hostname in CONFIG_DB and apply it to the live system.
+
+    Mirrors SONiC's hostname-config.sh/hostcfgd (/etc/hostname, hostname -F,
+    a "127.0.0.1 <name>" hosts entry), which do not run again after the
+    CONFIG_DB reload on 4.6. Writing CONFIG_DB first means SONiC agrees with
+    the live hostname instead of resetting it later. The saved config is only
+    updated if it exists; it is not created here.
+    """
+    if not valid_hostname(hostname):
+        raise ValueError(f"invalid hostname {hostname!r}")
+    tmp = f"{hosts_file}.vrnetlab"
+    persist = (
+        'python3 -c "import json,os,shutil,sys;p,h=sys.argv[1:];'
+        "d=json.load(open(p));"
+        "d.setdefault('DEVICE_METADATA',{}).setdefault('localhost',{})['hostname']=h;"
+        "t=p+'.vrnetlab';json.dump(d,open(t,'w'),indent=4);"
+        'shutil.copymode(p,t);os.replace(t,p)"'
+    )
+    return (
+        f'H={hostname}; O="$(hostname)"; '
+        "sonic-db-cli CONFIG_DB HSET 'DEVICE_METADATA|localhost' hostname \"$H\" >/dev/null; "
+        f'echo "$H" > {hostname_file} && hostname -F {hostname_file}; '
+        'awk -v o="$O" -v h="$H" \'!($1 == "127.0.0.1" && NF == 2 && '
+        '($2 == h || ($2 == o && o != "localhost")))\' '
+        f'{hosts_file} > {tmp} && echo "127.0.0.1 $H" >> {tmp} && '
+        f"cat {tmp} > {hosts_file}; rm -f {tmp}; "
+        f'if [ -f {config_db} ]; then {persist} {config_db} "$H"; '
+        f"else echo '{config_db} absent, hostname not persisted to it'; fi"
     )
 
 
@@ -145,13 +194,8 @@ class Dell_Sonic_VM(vrnetlab.VM):
         self.wait_write(self.password, "New password:")
         self.wait_write(self.password, "password:")
         self.wait_write("sleep 1", "#")
-        # set hostname by changing the default config file
-        # using hostanamectl did not work, since the default config file is read afterwards.
-        self.wait_write(
-            f'sudo sed -i \'s/"hostname": "sonic",/"hostname": "{self.hostname}",/g\' /etc/sonic/config_db.json',
-            "#",
-        )
         self.wait_mgmt_ready()
+        self.bootstrap_hostname()
         self.wait_write("logout", "#")
         self.logger.info("completed bootstrap configuration")
 
@@ -199,6 +243,44 @@ class Dell_Sonic_VM(vrnetlab.VM):
                 "management interface, IPv4 SSH or CONFIG_DB not ready after "
                 f"{MGMT_READY_TIMEOUT}s; SSH-based startup config loading may fail"
             )
+
+    def intended_hostname(self):
+        """Hostname from the startup config if it sets one, else the node name.
+
+        Returns None if the chosen name is not a valid SONiC hostname, so an
+        intentional startup-config hostname is never silently replaced.
+        """
+        hostname, source = self.hostname, "node name"
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE) as f:
+                    meta = json.load(f).get("DEVICE_METADATA", {}).get("localhost", {})
+                configured = meta.get("hostname")
+            except (OSError, ValueError, AttributeError) as e:
+                self.logger.warning(
+                    f"Cannot read hostname from {CONFIG_FILE} ({type(e).__name__}), "
+                    "using the node name"
+                )
+                configured = None
+            if configured is not None:
+                hostname, source = configured, f"startup config {CONFIG_FILE}"
+        if not valid_hostname(hostname):
+            self.logger.warning(
+                f"Invalid hostname {hostname!r} from {source}, not setting hostname"
+            )
+            return None
+        self.logger.info(f"Using hostname {hostname} from {source}")
+        return hostname
+
+    def bootstrap_hostname(self):
+        """Apply the intended hostname to CONFIG_DB and the live system.
+
+        Runs after CONFIG_DB initialization, so config-setup's reload cannot
+        reset it; a startup config loaded later sets the same hostname.
+        """
+        hostname = self.intended_hostname()
+        if hostname:
+            self.wait_write(hostname_cmd(hostname), "#")
 
     def startup_config(self):
         """Load additional config provided by user."""
