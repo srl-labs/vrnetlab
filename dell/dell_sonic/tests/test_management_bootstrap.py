@@ -195,7 +195,7 @@ echo "port 22"
         self.assertFalse(self.dropin.exists())
         self.assertEqual(self.calls(), "")
 
-    def stub_state(self, link, listener, config_setup, db_init):
+    def stub_state(self, link, listener, config_setup, db_init, hostname_cfg=""):
         write_exe(
             self.bin / "ip",
             f'#!/bin/sh\necho "2: eth0: <UP> mtu 1500 state {link} mode DEFAULT"\n',
@@ -211,6 +211,8 @@ echo "port 22"
             f"""#!/bin/sh
 case "$*" in
     is-active*config-setup*) [ "{config_setup}" = active ] && exit 0; exit 3 ;;
+    list-jobs*) [ "{hostname_cfg}" = queued ] && echo "42 hostname-config.service start waiting"; exit 0 ;;
+    show*hostname-config*) [ "{hostname_cfg}" = activating ] && echo activating || echo inactive; exit 0 ;;
 esac
 exit 1
 """,
@@ -238,6 +240,10 @@ exit 0
             ("UP", True, "activating", "1"),
             ("UP", True, "active", "0"),
             ("UP", True, "active", ""),
+            # hostname-config.sh still pending or running: it would append
+            # a second /etc/hosts entry after the launcher's (validation #3)
+            ("UP", True, "active", "1", "queued"),
+            ("UP", True, "active", "1", "activating"),
         ):
             with self.subTest(state=state):
                 self.stub_state(*state)

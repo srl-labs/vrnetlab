@@ -109,6 +109,14 @@ if [ "$1" = -F ]; then cat "$2" > "{self.kernel}"; else cat "{self.kernel}"; fi
 """,
         )
         write_exe(self.bin / "sonic-db-cli", f'#!/bin/sh\necho "$*" >> "{self.db}"\n')
+        self.hostcfgd = "inactive"
+        write_exe(
+            self.bin / "systemctl",
+            f"""#!/bin/sh
+[ "$*" = "is-active --quiet hostcfgd" ] && [ -f "{self.tmp}/hostcfgd" ] && exit 0
+exit 3
+""",
+        )
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}")
 
     def run_cmd(self, name):
@@ -174,6 +182,49 @@ if [ "$1" = -F ]; then cat "$2" > "{self.kernel}"; else cat "{self.kernel}"; fi
         self.kernel.write_text("localhost\n")
         self.run_cmd("leaf1")
         self.assertIn("127.0.0.1       localhost\n", self.hosts.read_text())
+
+    def sonic_apply(self, old, new):
+        """SONiC's hostname-config.sh / hostcfgd /etc/hosts update."""
+        lines = [
+            line
+            for line in self.hosts.read_text().splitlines()
+            if not (line.split()[-1:] == [old] and line != line.split()[-1])
+        ]
+        lines.append(f"127.0.0.1 {new}")
+        self.hosts.write_text("\n".join(lines) + "\n")
+
+    def leaf_entries(self, name):
+        return self.hosts.read_text().splitlines().count(f"127.0.0.1 {name}")
+
+    def test_sonic_apply_after_launcher_duplicates_entry(self):
+        # Validation #3: hostname-config.sh ran after the launcher's edit,
+        # deleted only the old name and appended again. The launcher must
+        # therefore run after it (readiness wait), not before.
+        self.run_cmd("leaf1")
+        self.sonic_apply("sonic", "leaf1")
+        self.assertEqual(self.leaf_entries("leaf1"), 2)
+
+    def test_launcher_after_sonic_apply_leaves_one_entry(self):
+        self.sonic_apply("sonic", "leaf1")
+        self.kernel.write_text("leaf1\n")
+        self.run_cmd("leaf1")
+        self.assertEqual(self.leaf_entries("leaf1"), 1)
+        self.assertNotIn("127.0.0.1 sonic", self.hosts.read_text())
+
+    def test_hostcfgd_running_applies_hostname_itself(self):
+        # Older images: hostcfgd reacts to the CONFIG_DB change and appends
+        # its own entry, so the launcher only writes CONFIG_DB.
+        (self.tmp / "hostcfgd").touch()
+        before = self.hosts.read_text()
+        res = self.run_cmd("leaf1")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn(
+            "HSET DEVICE_METADATA|localhost hostname leaf1", self.db.read_text()
+        )
+        self.assertEqual(self.hosts.read_text(), before)
+        self.assertEqual(self.kernel.read_text().strip(), "sonic")
+        self.sonic_apply("sonic", "leaf1")
+        self.assertEqual(self.leaf_entries("leaf1"), 1)
 
     def test_rejects_unsafe_hostname(self):
         for name in ("a b", "x;rm -rf /", "$(id)", "-lead", "a_b", ""):

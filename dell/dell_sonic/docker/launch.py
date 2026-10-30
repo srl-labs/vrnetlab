@@ -38,7 +38,8 @@ def mgmt_ready_cmd(timeout=MGMT_READY_TIMEOUT):
     The console login can appear while config-setup is still reloading
     CONFIG_DB; "config load" then fails its PORT table check. Wait for the
     config-setup oneshot to finish and CONFIG_DB_INITIALIZED, the flag SONiC's
-    own swss/syncd start scripts wait on.
+    own swss/syncd start scripts wait on. Also wait for the boot-time
+    hostname-config oneshot, which otherwise races the hostname step.
     The printf arguments keep the echoed command from matching the marker.
     """
     checks = (
@@ -46,6 +47,8 @@ def mgmt_ready_cmd(timeout=MGMT_READY_TIMEOUT):
         ' && ss -Hltn "sport = :22" | grep -q "0.0.0.0:22"'
         " && systemctl is-active --quiet config-setup"
         ' && [ "$(sonic-db-cli CONFIG_DB GET CONFIG_DB_INITIALIZED)" = 1 ]'
+        " && ! systemctl list-jobs --no-legend | grep -q hostname-config"
+        ' && [ "$(systemctl show -p ActiveState --value hostname-config)" != activating ]'
     )
     return (
         f"timeout {timeout} sh -c 'until {checks}; do sleep 1; done'"
@@ -73,9 +76,11 @@ def hostname_cmd(
     """Set the hostname in CONFIG_DB and apply it to the live system.
 
     Mirrors SONiC's hostname-config.sh/hostcfgd (/etc/hostname, hostname -F,
-    a "127.0.0.1 <name>" hosts entry), which do not run again after the
-    CONFIG_DB reload on 4.6. Writing CONFIG_DB first means SONiC agrees with
-    the live hostname instead of resetting it later. The saved config is only
+    a "127.0.0.1 <name>" hosts entry). hostname-config runs once at boot (the
+    readiness wait orders us after it) and hostcfgd does not run on the 4.6
+    VM. Where hostcfgd runs, it reacts to the CONFIG_DB change and appends its
+    own hosts entry, so only CONFIG_DB is written. Writing CONFIG_DB first
+    means SONiC agrees with the live hostname instead of resetting it later. The saved config is only
     updated if it exists; it is not created here.
     """
     if not valid_hostname(hostname):
@@ -91,11 +96,13 @@ def hostname_cmd(
     return (
         f'H={hostname}; O="$(hostname)"; '
         "sonic-db-cli CONFIG_DB HSET 'DEVICE_METADATA|localhost' hostname \"$H\" >/dev/null; "
+        "if systemctl is-active --quiet hostcfgd; then "
+        "echo 'hostcfgd applies the hostname'; else "
         f'echo "$H" > {hostname_file} && hostname -F {hostname_file}; '
         'awk -v o="$O" -v h="$H" \'!($1 == "127.0.0.1" && NF == 2 && '
         '($2 == h || ($2 == o && o != "localhost")))\' '
         f'{hosts_file} > {tmp} && echo "127.0.0.1 $H" >> {tmp} && '
-        f"cat {tmp} > {hosts_file}; rm -f {tmp}; "
+        f"cat {tmp} > {hosts_file}; rm -f {tmp}; fi; "
         f'if [ -f {config_db} ]; then {persist} {config_db} "$H"; '
         f"else echo '{config_db} absent, hostname not persisted to it'; fi"
     )
