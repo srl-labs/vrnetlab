@@ -14,7 +14,6 @@ import vrnetlab
 CONFIG_FILE = "/config/config_db.json"
 DEFAULT_USER = "admin"
 DEFAULT_PASSWORD = "YourPaSsWoRd"
-SSHD_DROPIN = "/etc/ssh/sshd_config.d/vrnetlab-ipv4.conf"
 NTPSEC_HOOK = "/etc/network/if-up.d/ntpsec-ntpdate"
 MGMT_READY_TIMEOUT = 300
 # Bound on each console prompt wait after the readiness check.
@@ -26,20 +25,6 @@ LOGIN_TIMEOUT = 60
 # Wait for the guest's own login prompt after "Login incorrect" before
 # nudging it with a carriage return.
 LOGIN_PROMPT_WAIT = 10
-
-
-def sshd_ipv4_listener_cmd(dropin=SSHD_DROPIN):
-    """Add an IPv4 sshd listener via a drop-in, only if sshd lacks one.
-
-    The wrapper forwards IPv4 port 22 to the guest. SONiC 4.6 can boot with
-    sshd listening only on [::] (V6ONLY); older images already listen on IPv4
-    and are left untouched.
-    """
-    return (
-        "sshd -T 2>/dev/null | grep -q '^listenaddress 0\\.0\\.0\\.0:' || "
-        f"{{ echo 'ListenAddress 0.0.0.0' > {dropin} && "
-        "systemctl try-reload-or-restart ssh; }"
-    )
 
 
 def ntpsec_hook_cmd(hook=NTPSEC_HOOK):
@@ -293,7 +278,7 @@ class Dell_Sonic_VM(vrnetlab.VM):
             self.logger.warning(f"Could not check {NTPSEC_HOOK}, continuing")
 
     def bootstrap_mgmt(self):
-        """Bring up management (address, link, default route, IPv4 sshd).
+        """Bring up management (address, link, default route).
 
         SONiC's own path (interfaces-config/hostcfgd) may not have configured
         eth0 by the time the console login appears, so apply the wrapper's
@@ -318,7 +303,6 @@ class Dell_Sonic_VM(vrnetlab.VM):
             self.wait_write(
                 f"ip -6 route replace default via {self.mgmt_gw_ipv6} dev eth0", "#"
             )
-        self.wait_write(sshd_ipv4_listener_cmd(), "#")
 
     def wait_mgmt_ready(self):
         """Wait for the guest state the SSH-based startup loader depends on."""

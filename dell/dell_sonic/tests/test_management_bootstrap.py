@@ -98,13 +98,11 @@ class BootstrapSequenceTests(unittest.TestCase):
         cmds = sent(vm)
         link = index_of(cmds, "ip link set eth0 up")
         route = index_of(cmds, "route replace default")
-        sshd = index_of(cmds, launch.SSHD_DROPIN)
         wait = index_of(cmds, "until ")
         logout = index_of(cmds, "logout")
         self.assertLess(index_of(cmds, "address replace 10.0.0.15"), link)
         self.assertLess(link, route)
         self.assertLess(route, wait)
-        self.assertLess(sshd, wait)
         self.assertLess(wait, logout)
         patterns = vm.tn.expect.call_args.args[0]
         self.assertIn(b"MGMT_READY", patterns)
@@ -146,23 +144,6 @@ class GuestSnippetTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
-        self.log = self.tmp / "calls.log"
-        self.dropin = self.tmp / "sshd_config.d" / "vrnetlab-ipv4.conf"
-        self.dropin.parent.mkdir()
-        self.main = self.tmp / "sshd_config"
-        self.main.write_text("ListenAddress ::\nX11Forwarding yes\n")
-        # Stub sshd -T: reports [::]:22 plus 0.0.0.0:22 once the drop-in exists.
-        write_exe(
-            self.bin / "sshd",
-            f"""#!/bin/sh
-echo "listenaddress [::]:22"
-[ -f "{self.dropin}" ] && echo "listenaddress 0.0.0.0:22"
-echo "port 22"
-""",
-        )
-        write_exe(
-            self.bin / "systemctl", f'#!/bin/sh\necho "systemctl $*" >> "{self.log}"\n'
-        )
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}")
 
     def run_sh(self, cmd):
@@ -174,27 +155,6 @@ echo "port 22"
             text=True,
             timeout=30,
         )
-
-    def calls(self):
-        return self.log.read_text() if self.log.exists() else ""
-
-    def test_sshd_ipv4_listener_is_idempotent(self):
-        cmd = launch.sshd_ipv4_listener_cmd(str(self.dropin))
-        before = self.main.read_text()
-        self.assertEqual(self.run_sh(cmd).returncode, 0)
-        self.assertEqual(self.dropin.read_text(), "ListenAddress 0.0.0.0\n")
-        self.assertEqual(self.calls().count("try-reload-or-restart ssh"), 1)
-        self.assertEqual(self.run_sh(cmd).returncode, 0)
-        self.assertEqual(self.calls().count("try-reload-or-restart ssh"), 1)
-        self.assertEqual(self.main.read_text(), before)
-
-    def test_sshd_already_listening_on_ipv4_is_untouched(self):
-        write_exe(self.bin / "sshd", '#!/bin/sh\necho "listenaddress 0.0.0.0:22"\n')
-        self.assertEqual(
-            self.run_sh(launch.sshd_ipv4_listener_cmd(str(self.dropin))).returncode, 0
-        )
-        self.assertFalse(self.dropin.exists())
-        self.assertEqual(self.calls(), "")
 
     def stub_state(self, link, listener, config_setup, db_init, hostname_cfg=""):
         write_exe(
