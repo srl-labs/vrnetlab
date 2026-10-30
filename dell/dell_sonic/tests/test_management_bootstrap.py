@@ -156,7 +156,9 @@ class GuestSnippetTests(unittest.TestCase):
             timeout=30,
         )
 
-    def stub_state(self, link, listener, config_setup, db_init, hostname_cfg=""):
+    def stub_state(
+        self, link, listener, config_setup, db_init, hostname_cfg="", bgp_up="TRUE"
+    ):
         write_exe(
             self.bin / "ip",
             f'#!/bin/sh\necho "2: eth0: <UP> mtu 1500 state {link} mode DEFAULT"\n',
@@ -178,11 +180,12 @@ esac
 exit 1
 """,
         )
-        # Stub sonic-db-cli: only "CONFIG_DB GET CONFIG_DB_INITIALIZED" is answered.
+        # Stub sonic-db-cli: only CONFIG_DB_INITIALIZED and the bgp UP_STATUS.
         write_exe(
             self.bin / "sonic-db-cli",
             f"""#!/bin/sh
 [ "$*" = "CONFIG_DB GET CONFIG_DB_INITIALIZED" ] && echo "{db_init}"
+[ "$*" = "STATE_DB HGET FEATURE|bgp UP_STATUS" ] && echo "{bgp_up}"
 exit 0
 """,
         )
@@ -205,6 +208,9 @@ exit 0
             # a second /etc/hosts entry after the launcher's (validation #3)
             ("UP", True, "active", "1", "queued"),
             ("UP", True, "active", "1", "activating"),
+            # bgp container still starting: a config load is not applied to FRR
+            ("UP", True, "active", "1", "", ""),
+            ("UP", True, "active", "1", "", "FALSE"),
         ):
             with self.subTest(state=state):
                 self.stub_state(*state)

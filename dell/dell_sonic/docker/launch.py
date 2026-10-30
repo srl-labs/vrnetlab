@@ -56,6 +56,10 @@ def mgmt_ready_cmd(timeout=MGMT_READY_TIMEOUT):
     config-setup oneshot to finish and CONFIG_DB_INITIALIZED, the flag SONiC's
     own swss/syncd start scripts wait on. Also wait for the boot-time
     hostname-config oneshot, which otherwise races the hostname step.
+    Finally wait until the bgp container reports up in STATE_DB. Its config
+    daemon renders the routing config from CONFIG_DB when the container
+    starts and then follows changes once initialized; a config load in
+    between is not applied to the routing stack.
     The printf arguments keep the echoed command from matching the marker.
     """
     checks = (
@@ -65,6 +69,7 @@ def mgmt_ready_cmd(timeout=MGMT_READY_TIMEOUT):
         ' && [ "$(sonic-db-cli CONFIG_DB GET CONFIG_DB_INITIALIZED)" = 1 ]'
         " && ! systemctl list-jobs --no-legend | grep -q hostname-config"
         ' && [ "$(systemctl show -p ActiveState --value hostname-config)" != activating ]'
+        ' && [ "$(sonic-db-cli STATE_DB HGET "FEATURE|bgp" UP_STATUS)" = TRUE ]'
     )
     return (
         f"timeout {timeout} sh -c 'until {checks}; do sleep 1; done'"
@@ -307,7 +312,8 @@ class Dell_Sonic_VM(vrnetlab.VM):
     def wait_mgmt_ready(self):
         """Wait for the guest state the SSH-based startup loader depends on."""
         self.logger.info(
-            "waiting for management interface, IPv4 SSH and CONFIG_DB initialization"
+            "waiting for management interface, IPv4 SSH, CONFIG_DB initialization "
+            "and the bgp container"
         )
         self.wait_write(mgmt_ready_cmd(), "#")
         ridx, match, buf = self.tn.expect(
@@ -319,10 +325,14 @@ class Dell_Sonic_VM(vrnetlab.VM):
         if match and "#" in buf.decode(errors="ignore")[match.end() :]:
             self.wait_write("", wait=None)
         if match and ridx == 0:
-            self.logger.info("management interface, IPv4 SSH and CONFIG_DB are ready")
+            self.logger.info(
+                "management interface, IPv4 SSH, CONFIG_DB and the bgp container "
+                "are ready"
+            )
         else:
             self.logger.warning(
-                "management interface, IPv4 SSH or CONFIG_DB not ready after "
+                "management interface, IPv4 SSH, CONFIG_DB or the bgp container "
+                "not ready after "
                 f"{MGMT_READY_TIMEOUT}s; SSH-based startup config loading may fail"
             )
 
