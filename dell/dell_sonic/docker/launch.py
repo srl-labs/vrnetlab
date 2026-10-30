@@ -16,6 +16,8 @@ DEFAULT_USER = "admin"
 DEFAULT_PASSWORD = "YourPaSsWoRd"
 SSHD_DROPIN = "/etc/ssh/sshd_config.d/vrnetlab-ipv4.conf"
 MGMT_READY_TIMEOUT = 300
+# Bound on each console prompt wait after the readiness check.
+PROMPT_TIMEOUT = 120
 
 
 def sshd_ipv4_listener_cmd(dropin=SSHD_DROPIN):
@@ -203,7 +205,7 @@ class Dell_Sonic_VM(vrnetlab.VM):
         self.wait_write("sleep 1", "#")
         self.wait_mgmt_ready()
         self.bootstrap_hostname()
-        self.wait_write("logout", "#")
+        self.prompt_write("logout")
         self.logger.info("completed bootstrap configuration")
 
     def bootstrap_mgmt(self):
@@ -240,9 +242,14 @@ class Dell_Sonic_VM(vrnetlab.VM):
             "waiting for management interface, IPv4 SSH and CONFIG_DB initialization"
         )
         self.wait_write(mgmt_ready_cmd(), "#")
-        ridx, match, _ = self.tn.expect(
+        ridx, match, buf = self.tn.expect(
             [b"MGMT_READY", b"MGMT_TIMEOUT"], MGMT_READY_TIMEOUT + 30
         )
+        # expect() drops the rest of the chunk it matched in. If the shell
+        # prompt arrived in that chunk it is gone; ask for a fresh one so the
+        # next prompt wait sees exactly one prompt either way.
+        if match and "#" in buf.decode(errors="ignore")[match.end() :]:
+            self.wait_write("", wait=None)
         if match and ridx == 0:
             self.logger.info("management interface, IPv4 SSH and CONFIG_DB are ready")
         else:
@@ -287,7 +294,21 @@ class Dell_Sonic_VM(vrnetlab.VM):
         """
         hostname = self.intended_hostname()
         if hostname:
-            self.wait_write(hostname_cmd(hostname), "#")
+            self.prompt_write(hostname_cmd(hostname))
+
+    def prompt_write(self, cmd, timeout=PROMPT_TIMEOUT):
+        """Wait (bounded) for the root shell prompt, then send cmd.
+
+        A lost prompt fails startup instead of leaving it hanging forever.
+        """
+        res = self.tn.read_until(b"#", timeout)
+        if b"#" not in res:
+            self.logger.error(
+                f"No shell prompt on the serial console within {timeout}s, "
+                "aborting startup"
+            )
+            sys.exit(1)
+        self.wait_write(cmd, wait=None)
 
     def startup_config(self):
         """Load additional config provided by user."""

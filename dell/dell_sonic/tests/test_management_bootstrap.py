@@ -10,6 +10,7 @@ Run with: python3 -m unittest discover -s dell/dell_sonic/tests
 import importlib.util
 import logging
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -62,7 +63,8 @@ def make_vm(ready=True, **mgmt):
     vm.wait_write = MagicMock()
     vm.tn = MagicMock()
     marker = b"MGMT_READY" if ready else b"MGMT_TIMEOUT"
-    vm.tn.expect.return_value = (0 if ready else 1, True, marker)
+    vm.tn.expect.return_value = (0 if ready else 1, re.search(marker, marker), marker)
+    vm.tn.read_until.return_value = b"root@sonic:~# "
     return vm
 
 
