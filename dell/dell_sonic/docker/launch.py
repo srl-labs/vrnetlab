@@ -22,6 +22,9 @@ PROMPT_TIMEOUT = 120
 HOSTCFGD_TIMEOUT = 20
 # Bound on the shell prompt or "Login incorrect" after sending a password.
 LOGIN_TIMEOUT = 60
+# Wait for the guest's own login prompt after "Login incorrect" before
+# nudging it with a carriage return.
+LOGIN_PROMPT_WAIT = 10
 
 
 def sshd_ipv4_listener_cmd(dropin=SSHD_DROPIN):
@@ -213,6 +216,12 @@ class Dell_Sonic_VM(vrnetlab.VM):
                 self.logger.info("Console login incorrect, trying the next password")
                 # Type nothing ahead: wait for the guest's own login prompt.
                 if b"login:" not in rest:
+                    rest = self.tn.read_until(b"login:", LOGIN_PROMPT_WAIT)
+                if b"login:" not in rest:
+                    # login(1) can sit silently waiting for input until its
+                    # own timeout; an empty line makes it prompt again.
+                    self.logger.info("No login prompt, sending a carriage return")
+                    self.wait_write("", wait=None)
                     rest = self.tn.read_until(b"login:", LOGIN_TIMEOUT)
                     if b"login:" not in rest:
                         break

@@ -15,8 +15,11 @@ from test_management_bootstrap import launch
 class LoginConsole(PromptConsole):
     """Guest login prompt that accepts only the guest's current password."""
 
-    def __init__(self, guest_password, answer=True, split=False):
+    def __init__(self, guest_password, answer=True, split=False, reprompt=True):
         super().__init__([])
+        # reprompt=False: no login prompt after "Login incorrect" until the
+        # next input line, as login(1) did in a failed 4.6 restart.
+        self.reprompt = reprompt
         self.pending = []
         self.split = split
         self.guest_password = guest_password
@@ -41,15 +44,17 @@ class LoginConsole(PromptConsole):
                 self.pending.append(b"\r\nadmin@sonic:~$ ")
             else:
                 self.state = "user"
-                if self.split:
+                if not self.reprompt:
+                    self.pending.append(b"\r\nLogin incorrect\r\n")
+                elif self.split:
                     self.pending += [b"\r\nLogin incorrect\r\n", b"sonic login: "]
                 else:
                     self.pending.append(b"\r\nLogin incorrect\r\nsonic login: ")
 
 
 class ConsoleLoginTests(unittest.TestCase):
-    def login(self, guest_password, password="secret", answer=True, split=False):
-        console = LoginConsole(guest_password, answer, split)
+    def login(self, guest_password, password="secret", answer=True, split=False, **kw):
+        console = LoginConsole(guest_password, answer, split, **kw)
         vm = make_vm(console)
         vm.password = password
         vm.logger = logging.getLogger("dell_sonic_restart_test")
@@ -71,6 +76,32 @@ class ConsoleLoginTests(unittest.TestCase):
                     ["", "admin", launch.DEFAULT_PASSWORD, "admin", "secret", ""],
                 )
                 self.assertEqual(console.state, "shell")
+
+    def test_missing_login_prompt_is_elicited_with_a_carriage_return(self):
+        console = self.login("secret", reprompt=False)
+        self.assertEqual(
+            console.writes,
+            ["", "admin", launch.DEFAULT_PASSWORD, "", "admin", "secret", ""],
+        )
+        self.assertEqual(console.state, "shell")
+
+    def test_no_login_prompt_after_carriage_return_exits(self):
+        console = LoginConsole("secret", reprompt=False)
+        vm = make_vm(console)
+        vm.logger = logging.getLogger("dell_sonic_restart_test")
+        original = console.write
+
+        def write(data):
+            # The guest ignores the carriage return too.
+            if data.decode().rstrip("\r") == "" and console.writes:
+                console.writes.append("")
+                return
+            original(data)
+
+        console.write = write
+        with self.assertRaises(SystemExit), self.assertLogs(level="ERROR"):
+            vm.console_login()
+        self.assertEqual(console.writes.count("admin"), 1)
 
     def test_wrong_passwords_exit(self):
         with self.assertRaises(SystemExit) as cm, self.assertLogs(level="ERROR"):
