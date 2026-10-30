@@ -15,6 +15,7 @@ CONFIG_FILE = "/config/config_db.json"
 DEFAULT_USER = "admin"
 DEFAULT_PASSWORD = "YourPaSsWoRd"
 SSHD_DROPIN = "/etc/ssh/sshd_config.d/vrnetlab-ipv4.conf"
+NTPSEC_HOOK = "/etc/network/if-up.d/ntpsec-ntpdate"
 MGMT_READY_TIMEOUT = 300
 # Bound on each console prompt wait after the readiness check.
 PROMPT_TIMEOUT = 120
@@ -38,6 +39,27 @@ def sshd_ipv4_listener_cmd(dropin=SSHD_DROPIN):
         "sshd -T 2>/dev/null | grep -q '^listenaddress 0\\.0\\.0\\.0:' || "
         f"{{ echo 'ListenAddress 0.0.0.0' > {dropin} && "
         "systemctl try-reload-or-restart ssh; }"
+    )
+
+
+def ntpsec_hook_cmd(hook=NTPSEC_HOOK):
+    """Disable the ntpsec-ntpdate if-up hook and unblock the boot waiting on it.
+
+    On SONiC 4.6 the hook runs "systemctl start ntpsec.service" from ifup and
+    waits for it. ntpsec.service is ordered after units that wait for
+    networking.service, so networking never finishes: the boot stalls with
+    eth0, hostcfgd and multi-user.target never started, and every later boot
+    hangs before the login prompt. Removing the execute bit persists on the
+    disk; killing the waiting systemctl client lets ifup, and the boot,
+    finish. Images without the hook, or where it is already disabled, are
+    left untouched. The printf arguments keep the echoed command from
+    matching the marker.
+    """
+    return (
+        f"if [ -x {hook} ] && chmod -x {hook}; then "
+        "pkill -x -f 'systemctl start ntpsec.service'; "
+        "printf '%s_%s\\n' NTPSEC_HOOK DISABLED; "
+        "else printf '%s_%s\\n' NTPSEC_HOOK UNCHANGED; fi"
     )
 
 
@@ -87,8 +109,8 @@ def hostname_cmd(
 
     Mirrors SONiC's hostname-config.sh/hostcfgd (/etc/hostname, hostname -F,
     a "127.0.0.1 <name>" hosts entry). hostname-config runs once at boot (the
-    readiness wait orders us after it) and hostcfgd does not run on the 4.6
-    VM. Where hostcfgd runs, it applies the CONFIG_DB change only if it has
+    readiness wait orders us after it) and hostcfgd may not be running yet.
+    Where hostcfgd runs, it applies the CONFIG_DB change only if it has
     subscribed and its cached hostname differs; a write that lands while it
     initializes is cached and never applied. So wait (bounded) for hostcfgd
     to apply it, and apply the live steps only if it did not, so its own
@@ -245,6 +267,7 @@ class Dell_Sonic_VM(vrnetlab.VM):
         self.logger.info("applying bootstrap configuration")
         self.wait_write("sudo -i", "$")
 
+        self.disable_ntpsec_hook()
         self.bootstrap_mgmt()
         self.wait_write("passwd -q %s" % (self.username))
         self.wait_write(self.password, "New password:")
@@ -254,6 +277,20 @@ class Dell_Sonic_VM(vrnetlab.VM):
         self.bootstrap_hostname()
         self.prompt_write("logout")
         self.logger.info("completed bootstrap configuration")
+
+    def disable_ntpsec_hook(self):
+        """Break the SONiC 4.6 boot deadlock on the ntpsec-ntpdate hook."""
+        self.wait_write(ntpsec_hook_cmd(), "#")
+        ridx, match, buf = self.tn.expect(
+            [b"NTPSEC_HOOK_DISABLED", b"NTPSEC_HOOK_UNCHANGED"], PROMPT_TIMEOUT
+        )
+        # As in wait_mgmt_ready: re-elicit a prompt that expect() consumed.
+        if "#" in buf.decode(errors="ignore")[match.end() if match else 0 :]:
+            self.wait_write("", wait=None)
+        if match and ridx == 0:
+            self.logger.info(f"Disabled {NTPSEC_HOOK}, which deadlocks the guest boot")
+        elif not match:
+            self.logger.warning(f"Could not check {NTPSEC_HOOK}, continuing")
 
     def bootstrap_mgmt(self):
         """Bring up management (address, link, default route, IPv4 sshd).

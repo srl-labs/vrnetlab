@@ -24,8 +24,9 @@ class Hang(Exception):
 class FakeConsole:
     """Scripted guest console with vrnetlab _Console read semantics."""
 
-    def __init__(self, ready_chunks):
+    def __init__(self, ready_chunks, hook_chunks=None):
         self.ready_chunks = ready_chunks
+        self.hook_chunks = hook_chunks or [b"NTPSEC_HOOK_UNCHANGED\r\n", PROMPT]
         self.pending = [b"admin@sonic:~$ "]
         self.writes = []
         self.passwd = 0
@@ -49,6 +50,8 @@ class FakeConsole:
         elif self.passwd == 1:
             self.passwd = 2
             self.pending.append(b"passwd: password updated successfully\r\n" + PROMPT)
+        elif "NTPSEC_HOOK" in cmd:
+            self.pending.extend([cmd.encode() + b"\r\n"] + self.hook_chunks)
         elif "until " in cmd:
             self.pending.extend([cmd.encode() + b"\r\n"] + self.ready_chunks)
         else:

@@ -106,7 +106,6 @@ class BootstrapSequenceTests(unittest.TestCase):
         self.assertLess(route, wait)
         self.assertLess(sshd, wait)
         self.assertLess(wait, logout)
-        vm.tn.expect.assert_called_once()
         patterns = vm.tn.expect.call_args.args[0]
         self.assertIn(b"MGMT_READY", patterns)
         # The console echoes the command; the marker must not appear verbatim in it.
