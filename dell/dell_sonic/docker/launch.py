@@ -140,6 +140,9 @@ class Dell_Sonic_VM(vrnetlab.VM):
             f"Startup config file {CONFIG_FILE} found, copying it to the VM"
         )
 
+        # handle_SIGCHLD would reap the child before subprocess collects its
+        # exit status, which makes a failed restore look successful
+        previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
         try:
             subprocess.run(
                 f"/backup.sh -u {self.username} -p {self.password} restore",
@@ -151,6 +154,8 @@ class Dell_Sonic_VM(vrnetlab.VM):
                 f"Failed to apply startup config {CONFIG_FILE}: {e} Aborting startup."
             )
             sys.exit(1)
+        finally:
+            signal.signal(signal.SIGCHLD, previous_sigchld)
 
 
 class Dell_SONiC(vrnetlab.VR):

@@ -182,6 +182,26 @@ class LauncherStartupConfigTests(unittest.TestCase):
         self.assertIn("startup config", output.lower())
         self.assertIn(f"/backup.sh -u admin -p {PASSWORD} restore", output)
 
+    def test_restore_failure_detected_with_sigchld_reaper_installed(self):
+        """The launcher's SIGCHLD reaper must not hide the restore exit code."""
+        vm = self.make_vm()
+        real_run = subprocess.run
+
+        def failing_restore(cmd, **kwargs):
+            return real_run("exit 3", **kwargs)
+
+        previous = signal.signal(signal.SIGCHLD, launch.handle_SIGCHLD)
+        try:
+            with (
+                self.assertLogs(vm.logger, level="ERROR"),
+                self.assertRaises(SystemExit),
+            ):
+                self.spin(vm, exists=True, run_side_effect=failing_restore)
+            self.assertIs(signal.getsignal(signal.SIGCHLD), launch.handle_SIGCHLD)
+        finally:
+            signal.signal(signal.SIGCHLD, previous)
+        self.assertFalse(vm.running)
+
 
 if __name__ == "__main__":
     unittest.main()
