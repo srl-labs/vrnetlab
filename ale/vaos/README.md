@@ -87,7 +87,6 @@ Optional environment variables:
 |-----------------------|-----------------------|-------------|
 | `VAOS_USERNAME`       | `--username`, `admin`      | Console login |
 | `VAOS_PASSWORD`       | `--password`, `Switch@123` | Console password |
-| `EMP_IPV4`            | management address    | EMP address (CIDR) |
 | `EMP_ROUTES`          |                       | `prefix=gateway` list, comma separated. A default route (0.0.0.0/0) is not allowed on EMP and is skipped |
 | `VAOS_STARTUP_CONFIG` | see step 4 above      | Path of the startup configuration |
 | `VAOS_EXTRA_CMDS`     |                       | Extra CLI commands, `;` separated |

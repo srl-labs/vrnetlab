@@ -82,9 +82,6 @@ MGMT_NIC_INDEX = 2
 #   VAOS_BOOTSTRAP   "false" to skip the bootstrap entirely   (default: true)
 #   VAOS_USERNAME    console login     (default: --username, admin)
 #   VAOS_PASSWORD    console password  (default: --password, Switch@123)
-#   EMP_IPV4         EMP address, CIDR. Default: the container mgmt IP in
-#                    mgmt-passthrough mode, 10.0.0.15/24 otherwise (the
-#                    address vrnetlab forwards ssh/snmp/... to in NAT mode)
 #   EMP_ROUTES       static routes, "prefix=gateway" separated by commas,
 #                    e.g. "192.168.200.0/24=192.168.121.254"
 #                    A default route (0.0.0.0/0) is not allowed on EMP and is
@@ -426,7 +423,9 @@ class VAOS_vm(vrnetlab.VM):
         username = os.environ.get("VAOS_USERNAME") or self.username
         password = os.environ.get("VAOS_PASSWORD") or self.password
 
-        emp = os.environ.get("EMP_IPV4") or self.mgmt_address_ipv4
+        # EMP address: the node management address (mgmt passthrough), or
+        # 10.0.0.15/24, where vrnetlab forwards ssh/snmp/... in NAT mode
+        emp = self.mgmt_address_ipv4
         if not emp or emp == "dhcp":
             emp = None
         elif "/" not in emp:
