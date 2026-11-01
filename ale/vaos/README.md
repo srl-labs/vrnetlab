@@ -100,5 +100,11 @@ With the containerlab `ale_vaos` kind, `containerlab save` creates
 writes `show configuration snapshot` to `/config/startup-config.cfg` and reports
 the result in `/config/.vaos-save-done`.
 
-With mgmt passthrough, the serial console is reachable from inside the container:
-`docker exec -it <node> telnet 127.0.0.1 5000`.
+### Serial console
+
+The serial console is exposed on TCP port 5000: `telnet <node> 5000`.
+
+With mgmt passthrough, vAOS uses its own MAC address for EMP (ALE OUI `00:d0:1a`).
+Once EMP is configured, the launcher learns that MAC with an ARP probe on `tap0`
+and sets it on the container `eth0`, so that port 5000 stays reachable on the
+node management address.

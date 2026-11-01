@@ -12,6 +12,9 @@ import logging
 import os
 import re
 import signal
+import socket
+import struct
+import subprocess
 import sys
 import time
 
@@ -379,6 +382,60 @@ class VAOS_vm(vrnetlab.VM):
             self.logger.info("vAOS not ready yet, retrying in %ds", READY_RETRY_DELAY)
             time.sleep(READY_RETRY_DELAY)
 
+    def _sync_emp_mac(self, emp):
+        """mgmt passthrough: copy the EMP MAC address to the container eth0.
+
+        vrnetlab gives the container eth0 the MAC of the VM management NIC, so
+        that traffic for the ports kept in the container (5000-5007, serial
+        console) is accepted by the container. vAOS does not use that MAC for
+        EMP but its own, so the launcher learns it with an ARP probe sent to
+        the VM on tap0 and sets it on eth0.
+        """
+        ip = socket.inet_aton(emp.split("/")[0])
+        try:
+            with open("/sys/class/net/%s/address" % self.mgmt_intf) as f:
+                src = bytes.fromhex(f.read().strip().replace(":", ""))
+            # ETH_P_ALL: frames from the VM are redirected to eth0 by tc on tap0
+            # ingress; only an ETH_P_ALL socket sees them before that
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+            sock.bind(("tap0", 0))
+            sock.settimeout(1)
+        except OSError as e:
+            self.logger.warning("EMP MAC sync skipped: %s", e)
+            return
+        # ARP probe: who-has <EMP IP>, sender IP 0.0.0.0
+        probe = (b"\xff" * 6 + src + b"\x08\x06"
+                 + struct.pack("!HHBBH", 1, 0x0800, 6, 4, 1)
+                 + src + b"\x00" * 4 + b"\x00" * 6 + ip)
+        mac = None
+        deadline = time.time() + 30
+        try:
+            while mac is None and time.time() < deadline:
+                sock.send(probe)
+                end = time.time() + 2
+                while time.time() < end:
+                    try:
+                        pkt = sock.recv(2048)
+                    except socket.timeout:
+                        break
+                    # ARP (reply, or gratuitous ARP) sent by the VM from the EMP IP
+                    if len(pkt) >= 42 and pkt[12:14] == b"\x08\x06" \
+                            and pkt[28:32] == ip and pkt[22:28] != src:
+                        mac = pkt[22:28]
+                        break
+        finally:
+            sock.close()
+        if mac is None:
+            self.logger.warning("EMP MAC sync: no ARP reply from EMP")
+            return
+        mac_str = ":".join("%02x" % b for b in mac)
+        res = subprocess.run(["ip", "link", "set", "dev", self.mgmt_intf, "address", mac_str],
+                             capture_output=True, text=True)
+        if res.returncode != 0:
+            self.logger.warning("EMP MAC sync: %s", res.stderr.strip())
+            return
+        self.logger.info("EMP MAC %s copied to container %s", mac_str, self.mgmt_intf)
+
     def _login(self, username, password):
         """Log in on the console. The first login prompt can come before AAA
         is ready, so retry a few times."""
@@ -455,6 +512,8 @@ class VAOS_vm(vrnetlab.VM):
 
         if emp:
             self._send("ip interface emp address %s" % emp)
+            if self.mgmt_passthrough:
+                self._sync_emp_mac(emp)
         else:
             self.logger.info("no EMP address to configure (DHCP mode)")
 
