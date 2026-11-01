@@ -1,3 +1,10 @@
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26-bookworm AS iouyap
+RUN git clone https://github.com/clab-labs/iouyap-go /src
+WORKDIR /src
+
+ARG BUILDARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$BUILDARCH GOAMD64=v1 go build -trimpath -ldflags="-s -w" -o /iouyap .
+
 FROM public.ecr.aws/docker/library/debian:bookworm-slim
 
 # Install dependencies
@@ -12,13 +19,7 @@ RUN apt-get update && \
     gnupg \
     && apt-get clean
 
-# Add containerlab gemfury for custom IOUYAP
-RUN echo "deb [trusted=yes] https://netdevops.fury.site/apt/ /" | \
-sudo tee -a /etc/apt/sources.list.d/netdevops.list
-
-# Update and install IOUYAP
-RUN apt-get update && \
-    apt-get install -y iouyap
+COPY --from=iouyap /iouyap /usr/bin/iouyap
 
 # Copy the entrypoint script
 COPY entrypoint.sh /entrypoint.sh
