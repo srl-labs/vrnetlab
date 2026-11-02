@@ -99,11 +99,16 @@ MGMT_NIC_INDEX = 2
 #                    in "->" if the config changes it.
 #   VAOS_EXTRA_CMDS  extra CLI commands, separated by ";"
 #   VAOS_SAVE        "false" to skip "write memory flash-synchro" (default: true)
-# Note: containerlab's own USERNAME/PASSWORD env vars (clab/clab@123) are
-# deliberately NOT used: the vAOS image does not know that account.
+# Note: the generic_vm kind passes containerlab's default account
+# (clab/clab@123) as --username/--password. The vAOS image does not know that
+# account, so it is replaced with admin/Switch@123.
 # Startup config locations: /config/startup-config.cfg is where the containerlab
 # ale_vaos kind puts the node startup-config; /startup-config.cfg is for a bind
 # mount with the generic_vm kind.
+DEFAULT_USER = "admin"
+DEFAULT_PASSWORD = "Switch@123"
+GENERIC_VM_USER = "clab"
+GENERIC_VM_PASSWORD = "clab@123"
 STARTUP_CONFIG_PATHS = ["/config/startup-config.cfg", "/startup-config.cfg"]
 # "containerlab save" (ale_vaos kind) drops SAVE_REQUEST in the mounted config
 # dir. launch.py then runs "write memory flash-synchro", stores
@@ -153,6 +158,11 @@ class VAOS_vm(vrnetlab.VM):
         if not disk_image:
             raise RuntimeError("No .qcow2 disk image found in /")
 
+        # The containerlab generic_vm kind passes its own default account
+        # (clab/clab@123), which vAOS does not know: use the vAOS default.
+        if (username, password) == (GENERIC_VM_USER, GENERIC_VM_PASSWORD):
+            username, password = DEFAULT_USER, DEFAULT_PASSWORD
+
         # ram=2048, smp=2 per the gns3a; driveif/ide + e1000 are vrnetlab defaults
         super(VAOS_vm, self).__init__(
             username,
@@ -166,9 +176,10 @@ class VAOS_vm(vrnetlab.VM):
         self.hostname = hostname
         self.conn_mode = conn_mode
         self.port_map = PORT_MAP
-        # expose all defined ports (max); vrnetlab only instantiates NICs for
-        # interfaces actually wired in the topology.
-        self.num_nics = max(nics, len(PORT_MAP) - 1)
+        # data NICs: every PORT_MAP entry except EMP (eth1-eth12). vrnetlab only
+        # instantiates NICs for interfaces actually wired in the topology.
+        self.num_nics = min(nics, len(PORT_MAP) - 1)
+        self._boot_out = b""
         self.nic_type = "e1000"
         self._log_port_map()
 
@@ -252,13 +263,15 @@ class VAOS_vm(vrnetlab.VM):
         """Poll the serial console until the OmniSwitch login prompt appears."""
         if self.spins > 6000:
             self.logger.warning("Too many spins, restarting VM")
+            # judge the next boot on its own console output
+            self._boot_out = b""
             self.stop()
             self.start()
             return
 
         (ridx, match, res) = self.tn.expect([b"login:"], 1)
         # keep the boot output, in case the link-up line shows before login:
-        self._boot_out = getattr(self, "_boot_out", b"") + res
+        self._boot_out += res
         if match and ridx == 0:
             self.logger.info("vAOS reached login prompt")
             if os.environ.get("VAOS_BOOTSTRAP", "true").lower() != "false":
@@ -488,7 +501,7 @@ class VAOS_vm(vrnetlab.VM):
         elif "/" not in emp:
             emp += "/24"
 
-        if re.search(LINK_UP_RE, getattr(self, "_boot_out", b"")):
+        if re.search(LINK_UP_RE, self._boot_out):
             self.logger.info("vAOS boot complete (Link 1/1/1 operationally up)")
         else:
             self.logger.info("waiting for '+++ Link 1/1/1 operationally up' (max %ds)",
@@ -563,9 +576,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="vAOS vrnetlab launcher")
     parser.add_argument("--trace", action="store_true", help="enable trace logging")
     parser.add_argument("--hostname", default="vaos", help="VM hostname")
-    parser.add_argument("--username", default="admin", help="Username")
-    parser.add_argument("--password", default="Switch@123", help="Password")
-    parser.add_argument("--nics", type=int, default=13, help="Number of NICs")
+    parser.add_argument("--username", default=DEFAULT_USER, help="Username")
+    parser.add_argument("--password", default=DEFAULT_PASSWORD, help="Password")
+    parser.add_argument(
+        "--nics", type=int, default=len(PORT_MAP) - 1, help="Number of data NICs"
+    )
     parser.add_argument(
         "--connection-mode", default="tc", help="vrnetlab datapath connection mode"
     )
