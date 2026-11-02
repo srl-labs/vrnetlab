@@ -152,7 +152,10 @@ class FOSCliDriver:
         index, match, output = self._terminal.expect(self._state_patterns, EXPECT_TIMEOUT_SECONDS)
         if match:
             return FOSCliState(index), output, True
-        return (FOSCliState.TN_TIMEOUT if not output else FOSCliState.UNKNOWN), output, False
+        # A timeout exposes retained bytes too. Only fresh input should reset
+        # the unknown-output stall timer; an unchanged buffer is still idle.
+        state = FOSCliState.UNKNOWN if output.received_new_data else FOSCliState.TN_TIMEOUT
+        return state, output, False
 
     def _handle_state(self, state):
         handler = self._state_handlers.get(state)

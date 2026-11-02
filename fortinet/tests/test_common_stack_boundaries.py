@@ -177,7 +177,7 @@ class EndToEndBoundaryCases(unittest.TestCase):
         finally:
             terminal.close()
 
-    def test_empty_connection_read_reaches_timeout_without_fabricating_output(self):
+    def test_idle_read_exposes_retained_prompt_newline(self):
         connection, terminal, commander, driver, feature, states = make_stack(
             CommandSpec("probe", capture_output=True), None
         )
@@ -186,7 +186,9 @@ class EndToEndBoundaryCases(unittest.TestCase):
                     patch("fortinet.common.fos_cli_driver.PROCESS_SPIN_SECONDS", 0.04):
                 driver.process_state()
             self.assertIn(FOSCliState.TN_TIMEOUT, states)
-            self.assertEqual(bytes(feature.current_attempt.output), b"")
+            # The login response ended with a newline after the matched CLI
+            # prompt. Full-buffer timeout inspection exposes that real byte.
+            self.assertEqual(bytes(feature.current_attempt.output), b"\n")
             self.assertTrue(commander.busy)
         finally:
             terminal.close()

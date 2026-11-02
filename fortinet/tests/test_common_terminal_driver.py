@@ -11,7 +11,8 @@ from unittest.mock import MagicMock, patch
 REPO_ROOT = __import__("pathlib").Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from fortinet.common.common import Credentials, FOSCliState  # noqa: E402
+from fortinet.common.cli_commands import CommandAttempt, CommandSpec  # noqa: E402
+from fortinet.common.common import Credentials, FOSCliState, TRACE_LEVEL  # noqa: E402
 from fortinet.common.fos_cli_driver import (  # noqa: E402
     FOSCliDriver,
     KernelPanicError,
@@ -88,6 +89,51 @@ class TerminalTests(unittest.TestCase):
             terminal._enforce_buffer_limit()
         terminal._logger.error.assert_called_once()
 
+    def test_timeout_preserves_partial_token_for_a_later_read(self):
+        terminal = self.terminal_with_data(b"Login incor")
+        pattern = rb"(?m)^Login incorrect\r?$"
+        index, match, output = terminal.expect([pattern], timeout=0.001)
+        self.assertEqual((index, match), (-1, None))
+        self.assertEqual(bytes(output), b"Login incor")
+        # Inspection without discard keeps the partial token, including when
+        # another wait expires without receiving any more bytes.
+        _, _, output = terminal.expect([pattern], timeout=0)
+        self.assertEqual(bytes(output), b"Login incor")
+        terminal._read_queue.put(b"rect\n")
+        index, match, output = terminal.expect([pattern], timeout=0.1)
+        self.assertEqual(index, 0)
+        self.assertEqual(match.group(), b"Login incorrect")
+        self.assertEqual(bytes(output), b"Login incorrect")
+        self.assertEqual(bytes(terminal._buffer), b"\n")
+
+    def test_timeout_inspection_sees_a_token_completed_by_new_input(self):
+        terminal = self.terminal_with_data(b"Verifying pass")
+        _, _, output = terminal.expect([b"fw #"], timeout=0.001)
+        self.assertIsNone(re.search(rb"Verifying password", bytes(output)))
+
+        terminal._read_queue.put(b"word...\n")
+        _, match, output = terminal.expect([b"fw #"], timeout=0.001)
+        self.assertIsNone(match)
+        self.assertIsNotNone(re.search(rb"Verifying password", bytes(output)))
+        self.assertEqual(bytes(terminal._buffer), b"Verifying password...\n")
+        output.discard()
+        self.assertEqual(bytes(terminal._buffer), b"")
+
+    def test_timeout_capture_consumes_retained_prefix_and_new_bytes(self):
+        prefix = b"\nVerifying password...\n"
+        chunk = b"admin\nadmin\n"
+        terminal = self.terminal_with_data(chunk)
+        terminal._buffer.extend(prefix)
+
+        _, _, output = terminal.expect([b"fw #"], timeout=0.001)
+        self.assertEqual(bytes(output), prefix + chunk)
+        attempt = CommandAttempt(CommandSpec("end"), 1, 0)
+        attempt.on_output(output)
+
+        self.assertEqual(bytes(attempt.output), prefix + chunk)
+        self.assertEqual(bytes(terminal._buffer), b"")
+        terminal._logger.warning.assert_not_called()
+
     def test_suppression_is_nested_and_restores_context(self):
         @contextmanager
         def context():
@@ -129,9 +175,22 @@ class TerminalTests(unittest.TestCase):
         logger.exception.assert_called_once()
         with patch.dict("os.environ", {"FOS_TERMINAL_BUFFER_LIMIT_BYTES": "32"}):
             self.assertEqual(terminal_buffer_limit_bytes(), 32)
-        with patch.dict("os.environ", {"FOS_TERMINAL_BUFFER_LIMIT_BYTES": "0"}):
+        with patch.dict("os.environ", {"FTNT_TERMINAL_BUFFER_LIMIT_BYTES": "64", "FOS_TERMINAL_BUFFER_LIMIT_BYTES": "32"}, clear=True):
+            self.assertEqual(terminal_buffer_limit_bytes(), 64)
+        with patch.dict("os.environ", {"FTNT_TERMINAL_BUFFER_LIMIT_BYTES": "0"}, clear=True):
             with self.assertRaises(ValueError):
                 terminal_buffer_limit_bytes()
+
+    def test_raw_serial_log_uses_ftnt_name_and_legacy_fos_alias(self):
+        for env_name in ("FTNT_LOG_RAW_SERIAL", "FOS_LOG_RAW_SERIAL"):
+            with self.subTest(env_name=env_name):
+                terminal = self.terminal_with_data(b"matched")
+                with patch.dict("os.environ", {env_name: "true"}, clear=True):
+                    terminal.expect([b"matched"], timeout=0.1)
+                terminal._logger.log.assert_called_once_with(
+                    TRACE_LEVEL,
+                    "buffer: bytearray(b'matched')",
+                )
 
 
 class DriverTests(unittest.TestCase):
@@ -223,6 +282,23 @@ class DriverTests(unittest.TestCase):
         terminal.expect.return_value = (-1, None, Data(b""))
         self.assertEqual(driver._next_state()[0], FOSCliState.TN_TIMEOUT)
         driver._handle_state(FOSCliState.CREDENTIAL_REJECTED)
+
+    def test_retained_timeout_output_does_not_count_as_fresh_input(self):
+        driver, _, _, logger, *_ = self.make_driver()
+        terminal = Terminal(MagicMock(), logger)
+        terminal._ensure_reader = lambda: None
+        terminal._read_queue.put(b"partial token")
+        driver._terminal = terminal
+
+        with patch("fortinet.common.fos_cli_driver.EXPECT_TIMEOUT_SECONDS", 0.001):
+            state, output, matched = driver._next_state()
+            self.assertEqual(state, FOSCliState.UNKNOWN)
+            self.assertEqual(bytes(output), b"partial token")
+            self.assertFalse(matched)
+            state, output, matched = driver._next_state()
+            self.assertEqual(state, FOSCliState.TN_TIMEOUT)
+            self.assertEqual(bytes(output), b"partial token")
+            self.assertFalse(matched)
 
     def test_kernel_panic_requires_kernel_diagnostic_and_raises(self):
         driver, terminal, commander, *_ = self.make_driver()

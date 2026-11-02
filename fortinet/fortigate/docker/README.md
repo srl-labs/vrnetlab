@@ -37,8 +37,11 @@ Important behavior:
   and sends one queued chunk at a time, so commander/driver state handling is
   not paced by each scrapli write call.
 - `Terminal.expect()` returns a `Data` object, not raw bytes. `Data` is a byte
-  view of what was just read or matched, and timeout `Data` can discard bytes
-  from the terminal's retained buffer.
+  view of the matched prefix or, on timeout, the entire unmatched buffer.
+  Inspecting timeout `Data` leaves those bytes buffered so later input can
+  complete a partial token. Calling `discard()` explicitly consumes the view.
+  `received_new_data` distinguishes fresh input from another inspection of the
+  same retained bytes, so idle waits still advance the driver's stall timer.
 - When multiple regexes match buffered output, the match that ends earliest
   wins. This avoids later, broader prompt patterns swallowing earlier prompts.
 - Matched bytes are consumed from the buffer; bytes after the match stay queued
