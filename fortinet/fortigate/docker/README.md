@@ -136,7 +136,7 @@ for `Command fail. Return code <number>`, including builds that append a period
 after the code. A closing failure stops the feature before completion callbacks
 or further commands, even when `fail_on_error=False`. It follows the bootstrap
 error policy: abort normally, or skip the failed feature when
-`FOS_EXIT_ON_BOOTSTRAP_ERROR=false`. This does not change error handling for
+`FTNT_EXIT_ON_BOOTSTRAP_ERROR=false`. This does not change error handling for
 individual `set` commands, which can deliberately tolerate unsupported fields.
 
 Session loss is explicit. Each command carries a `SessionLossAction`:
@@ -259,8 +259,8 @@ and submit follow-up blocks based on command output or timer ticks.
 Current bootstrap stages are:
 
 - `disk-format`: formats additional disks after the first FortiGate log disk
-- `admin`: disables password policy, creates/updates the desired admin, and
-  handles session loss during password changes
+- `admin`: disables password policy, creates/updates the desired admin, then
+  logs out and waits for console authentication before later stages run
 - `image-info`: reads `get system status` once and stores the parsed
   platform, major, minor, patch, and build on `vm.fos_version` for later
   features
@@ -338,8 +338,11 @@ credentials so it can answer prompts with the password that is valid at that
 moment.
 
 The desired credentials are activated after the admin edit commits. Password
-command output is checked for FortiOS command failures. After a password
-change, the driver first tries the desired credentials. If FortiOS rejects
+command output is checked for FortiOS command failures. After closing the admin
+configuration, the feature sends `exit` and waits for a successful login and CLI
+prompt before completing. A logout during the commit also activates the new
+credentials without replaying the password change. The driver first tries the
+desired credentials. If FortiOS rejects
 them, it retries immediately with the previously accepted credentials, without
 replacing the desired credentials used for later logins.
 

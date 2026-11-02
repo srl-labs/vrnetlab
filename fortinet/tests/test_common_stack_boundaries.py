@@ -102,9 +102,13 @@ def prompt_case(hostname, context, marker, ending):
 
 def state_case(state, sample, suffix=b"", *, recover=False):
     response = sample + suffix
-    if state in (FOSCliState.CREDENTIAL_REJECTED, FOSCliState.PROVIDE_USERNAME):
-        completion = (FOSCliState.CMD_PROMPT,)
-    elif state in (FOSCliState.CREDENTIAL_ACCEPTED, FOSCliState.SESSION_LOST, FOSCliState.CMD_PROMPT_ECHO):
+    if state in (
+        FOSCliState.CREDENTIAL_REJECTED,
+        FOSCliState.PROVIDE_USERNAME,
+        FOSCliState.CREDENTIAL_ACCEPTED,
+        FOSCliState.SESSION_LOST,
+        FOSCliState.CMD_PROMPT_ECHO,
+    ):
         completion = (FOSCliState.CMD_PROMPT,)
     else:
         completion = (state,)
