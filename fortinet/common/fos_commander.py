@@ -494,7 +494,7 @@ class FOSCommander:
             before is not None
             and after is not None
             and before != after
-            and not self._command_may_change_context(attempt.spec.line)
+            and not self._command_may_change_context(attempt.spec)
         )
 
     def _handle_context_loss(self, attempt):
@@ -543,8 +543,10 @@ class FOSCommander:
         return False
 
     @staticmethod
-    def _command_may_change_context(line):
-        command = line.strip().lower()
+    def _command_may_change_context(spec):
+        if spec.continuation:
+            return False
+        command = spec.line.strip().lower()
         return (
             command.startswith(("config ", "edit "))
             or command in {"next", "end", "abort", "exit", "quit"}

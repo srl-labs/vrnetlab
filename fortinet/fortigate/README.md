@@ -169,7 +169,11 @@ end
 ```
 
 The importer validates basic `config` / `edit` / `next` / `end` nesting and
-fails startup on malformed structure.
+fails startup on malformed structure or unterminated quoted strings. Single-
+and double-quoted values can span lines. Newlines, whitespace, blank lines,
+and scope keywords inside a quoted value are preserved. Each continued line
+is sent only after the CLI's continuation prompt; the closing line must return
+to a command prompt. An unexpected prompt follows the bootstrap error policy.
 
 The bootstrap DNS servers selected from the container resolver or
 `FTNT_DNS_PRIMARY` / `FTNT_DNS_SECONDARY` persist through startup config

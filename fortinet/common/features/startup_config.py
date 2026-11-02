@@ -45,14 +45,51 @@ def filter_startup_config_blocks(blocks, logger):
     return filtered
 
 
+def _startup_config_commands(config):
+    """Yield logical CLI commands while retaining quoted newlines verbatim."""
+    pending = []
+    quote = None
+    start_line = None
+    for number, raw_line in enumerate(config, start=1):
+        # Text mode normalizes file line endings. Only remove the delimiter;
+        # whitespace and comment/scope-looking lines inside quotes are data.
+        line = raw_line.removesuffix("\n")
+        if not pending:
+            line = line.lstrip()
+            if not line or line.startswith("#"):
+                continue
+            start_line = number
+
+        escaped = False
+        for character in line:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            elif quote is None and character in {"'", '"'}:
+                quote = character
+
+        if quote is not None or escaped:
+            pending.append(line)
+            continue
+        pending.append(line.rstrip())
+        yield "\n".join(pending)
+        pending.clear()
+
+    if pending:
+        reason = "unterminated quoted string" if quote else "unfinished line continuation"
+        raise ValueError(
+            f"Startup config malformed. {reason} starting on line {start_line}."
+        )
+
+
 def parse_startup_config(path):
     roots = []
     stack = []
     with open(path) as config:
-        for raw_line in config:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
+        for line in _startup_config_commands(config):
             if line.startswith("config "):
                 node = ConfigBlock(line[7:])
                 (stack[-1].children if stack else roots).append(node)
