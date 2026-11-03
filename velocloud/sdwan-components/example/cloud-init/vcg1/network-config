@@ -1,0 +1,17 @@
+version: 2
+ethernets:
+  eth0:                     # management only (container eth0), vrnetlab DHCP -> 10.0.0.15
+    dhcp4: true
+    dhcp4-overrides:        # no default route / DNS via management
+      use-routes: false
+      use-dns: false
+  eth1:                     # public / WAN (container eth1 -> router eth2)
+    dhcp4: false
+    addresses:
+      - 100.64.65.2/24
+    routes:
+      - to: 0.0.0.0/0
+        via: 100.64.65.1
+    nameservers:
+      addresses:
+        - 8.8.8.8

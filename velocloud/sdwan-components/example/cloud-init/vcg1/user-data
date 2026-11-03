@@ -1,0 +1,17 @@
+#cloud-config
+hostname: vcg1
+manage_etc_hosts: true
+
+# Host-level config
+password: Velocloud123
+chpasswd: { expire: False }
+ssh_pwauth: True
+
+bootcmd:
+  # eth0 is the vrnetlab management interface: move the Gateway's WAN/VCMP to eth1.
+  # Keep this in list form: as a plain string the `": ` makes the file invalid YAML.
+  - [ sed, -i, -e, 's/"wan": \["eth0"\]/"wan": ["eth1"]/', -e, 's/"vcmp.interfaces": \["eth0"\]/"vcmp.interfaces": ["eth1"]/', /etc/config/gatewayd ]
+  - [ sed, -i, -e, 's/^wan="eth0"/wan="eth1"/', /etc/config/gatewayd-tunnel ]
+
+runcmd:
+  - chage -M -1 vcadmin
