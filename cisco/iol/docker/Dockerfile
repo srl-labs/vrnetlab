@@ -1,9 +1,8 @@
-FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26-bookworm AS iouyap
+FROM public.ecr.aws/docker/library/golang:1.26-bookworm AS iouyap
 RUN git clone https://github.com/clab-labs/iouyap-go /src
 WORKDIR /src
 
-ARG BUILDARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$BUILDARCH GOAMD64=v1 go build -trimpath -ldflags="-s -w" -o /iouyap .
+RUN CGO_ENABLED=0 GOAMD64=v1 go build -trimpath -ldflags="-s -w" -o /iouyap .
 
 FROM public.ecr.aws/docker/library/debian:bookworm-slim
 
