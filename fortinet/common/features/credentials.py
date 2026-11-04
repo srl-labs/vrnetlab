@@ -1,12 +1,13 @@
 """Administrator bootstrap feature."""
 
-from ..cli_commands import CommandSpec, ConfigBlock, EditBlock, SessionLossAction
+from ..cli_commands import CommandSequence, CommandSpec, ConfigBlock, EditBlock, SessionLossAction
+from ..common import FOSCliState
 
 from .base import StaticFeature
 
 
 class CredentialsFeature(StaticFeature):
-    """Configure the administrator and change credentials after password loss."""
+    """Configure the administrator, then log out and authenticate again."""
 
     def __init__(self, vm, commander):
         self._activate_after_admin_commit = False
@@ -30,12 +31,37 @@ class CredentialsFeature(StaticFeature):
         super().__init__(vm, commander, "admin", [
             ConfigBlock("system password-policy", ["set status disable"]),
             ConfigBlock("system admin", [EditBlock(credentials.username, admin_children)]),
+            CommandSequence("admin-relogin", [CommandSpec(
+                "exit",
+                session_loss=SessionLossAction.CONTINUE,
+                capture_output=True,
+                fail_on_error=True,
+                # A successful logout takes the session-loss path. Returning
+                # straight to a CLI prompt must not count as verification.
+                expected_completion_state=FOSCliState.PROVIDE_USERNAME,
+            )]),
         ], on_complete=lambda: self._activate_desired_credentials())
 
+    def on_command_dispatched(self, attempt):
+        if attempt.spec.line == "exit":
+            self._activate_desired_credentials()
+        super().on_command_dispatched(attempt)
+
     def on_session_loss(self, attempt):
+        if attempt.spec.line == "exit":
+            # The commander resumes this block only at the authenticated CLI
+            # prompt. Clear the logout command so it cannot be replayed.
+            return SessionLossAction.CONTINUE
         if self._is_password_command(attempt.spec.line):
             self._activate_desired_credentials()
             self._activate_after_admin_commit = False
+            return SessionLossAction.CONTINUE
+        if self._activate_after_admin_commit and attempt.spec.line == "next":
+            # Some releases log out during the commit instead of returning
+            # its CLI prompt. Authenticate with the committed password.
+            self._activate_desired_credentials()
+            self._activate_after_admin_commit = False
+            self._password_change_committed = True
             return SessionLossAction.CONTINUE
         if self._password_change_committed:
             # FortiOS may log out as the admin edit closes. The password

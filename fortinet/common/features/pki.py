@@ -299,9 +299,10 @@ class InstallPkiCertificates(Feature):
         # A configuration attempt is deliberately best-effort: the feature
         # must be able to inspect the result and fall back to the TFTP import
         # path when a firmware release does not expose this config tree.  If
-        # these wrapper commands keep ``fail_on_error`` enabled, the commander
-        # raises before ``on_command_executed`` can record the failed config
-        # attempt and select the fallback.
+        # opening commands keep ``fail_on_error`` enabled, the commander raises
+        # before ``on_command_executed`` can select that fallback. A return-code
+        # failure from `next` or `end` is always fatal to the feature: the
+        # commander checks scope commits even when fail_on_error is disabled.
         def config_command(line):
             return CommandSpec(line, capture_output=True, fail_on_error=False)
 

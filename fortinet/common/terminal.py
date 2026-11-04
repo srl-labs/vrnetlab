@@ -30,10 +30,13 @@ def terminal_buffer_limit_bytes():
 class Data:
     """A byte view returned by Terminal.expect with authority to discard itself."""
 
-    def __init__(self, value, discard_callback=None):
+    def __init__(self, value, discard_callback=None, *, received_new_data=None):
         self.value = bytes(value)
         self._discard_callback = discard_callback
         self.discarded = False
+        self.received_new_data = (
+            bool(self.value) if received_new_data is None else received_new_data
+        )
 
     def __bytes__(self):
         return self.value
@@ -215,32 +218,42 @@ class Terminal:
 
         The match ending earliest in the buffered stream wins. Data through that
         match is returned and discarded; data after it remains buffered.
+        On timeout, the entire unmatched buffer is returned for inspection and
+        stays buffered unless the caller explicitly discards it.
         """
         self._ensure_reader()
         deadline = None if timeout is None else time.monotonic() + timeout
-        received = bytearray()
+        received_new_data = False
         result = self._match(regex_list)
 
         while result is None:
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
-                return -1, None, Data(bytes(received), self._discard_prefix)
+                return -1, None, Data(
+                    self._buffer,
+                    self._discard_prefix,
+                    received_new_data=received_new_data,
+                )
 
             data = self._read_queue.get(remaining)
             if data:
                 self._buffer.extend(data)
                 self._enforce_buffer_limit()
-                received.extend(data)
+                received_new_data = True
                 if (
                     get_env(RAW_SERIAL_LOG_ENV, "").lower() in ("1", "true", "yes")
                     and self._output_suppression_depth == 0
                 ):
-                    self._logger.log(TRACE_LEVEL - 1, f"buffer: {self._buffer}")
+                    self._logger.log(TRACE_LEVEL, f"buffer: {self._buffer}")
                 result = self._match(regex_list)
                 continue
 
             if deadline is not None and time.monotonic() >= deadline:
-                return -1, None, Data(bytes(received), self._discard_prefix)
+                return -1, None, Data(
+                    self._buffer,
+                    self._discard_prefix,
+                    received_new_data=received_new_data,
+                )
 
         index, match = result
         consumed = bytes(self._buffer[:match.end()])
@@ -253,7 +266,10 @@ class Terminal:
         if not data:
             return
         if not self._buffer.startswith(data):
-            self._logger.debug("Refusing to discard non-prefix terminal output")
+            message = "Refusing to discard non-prefix terminal output"
+            if self._logger.isEnabledFor(TRACE_LEVEL):
+                message += f": data={data!r}; buffer={self._buffer!r}"
+            self._logger.warning(message)
             return
         del self._buffer[:len(data)]
 

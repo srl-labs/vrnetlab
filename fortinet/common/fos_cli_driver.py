@@ -1,4 +1,5 @@
 import logging
+import math
 import re
 import time
 from .common import (
@@ -8,12 +9,18 @@ from .common import (
     PROMPT_CONTEXT_REGEX,
     TRACE_LEVEL,
 )
+from .env import get_env
 
 
 PROCESS_SPIN_SECONDS = 10
 EXPECT_TIMEOUT_SECONDS = 1
 UNKNOWN_STALL_SECONDS = 30
 UNKNOWN_STALL_NEWLINE_LIMIT = 3
+CREDENTIAL_RETRY_DELAY_SECONDS = 3
+
+
+class KernelPanicError(RuntimeError):
+    """Raised when the guest kernel reports a panic on the serial console."""
 
 
 class FOSCliDriver:
@@ -43,6 +50,16 @@ class FOSCliDriver:
         self._activate_blank_credentials = activate_blank_credentials
         self._activate_bootstrap_credentials = activate_bootstrap_credentials
         self._allow_credential_recovery = allow_credential_recovery
+        self._credential_retry_delay_seconds = float(
+            get_env("FTNT_NEW_CREDENTIAL_REJECTED_RETRY_TIMEOUT")
+            or CREDENTIAL_RETRY_DELAY_SECONDS
+        )
+        if (not math.isfinite(self._credential_retry_delay_seconds)
+                or self._credential_retry_delay_seconds < 0):
+            raise ValueError(
+                "FTNT_NEW_CREDENTIAL_REJECTED_RETRY_TIMEOUT must be a finite "
+                "non-negative number of seconds"
+            )
         self._recovery_credentials = None
         self._recovery_attempted = False
         self._use_recovery_credentials = False
@@ -67,6 +84,7 @@ class FOSCliDriver:
             FOSCliState.CREDENTIAL_REJECTED: self._credential_rejected,
             FOSCliState.LIC_FAIL: self._license_failed,
             FOSCliState.TN_TIMEOUT: self._timeout,
+            FOSCliState.KERNEL_PANIC: self._kernel_panic,
             FOSCliState.UNKNOWN: self._unknown,
         }
 
@@ -147,7 +165,10 @@ class FOSCliDriver:
         index, match, output = self._terminal.expect(self._state_patterns, EXPECT_TIMEOUT_SECONDS)
         if match:
             return FOSCliState(index), output, True
-        return (FOSCliState.TN_TIMEOUT if not output else FOSCliState.UNKNOWN), output, False
+        # A timeout exposes retained bytes too. Only fresh input should reset
+        # the unknown-output stall timer; an unchanged buffer is still idle.
+        state = FOSCliState.UNKNOWN if output.received_new_data else FOSCliState.TN_TIMEOUT
+        return state, output, False
 
     def _handle_state(self, state):
         handler = self._state_handlers.get(state)
@@ -256,6 +277,10 @@ class FOSCliDriver:
         if self._last_known_state == FOSCliState.REBOOTING:
             self._idle_spins += 1
 
+    @staticmethod
+    def _kernel_panic():
+        raise KernelPanicError("Kernel panic detected on serial console")
+
     def _note_unknown_output(self):
         self._unknown_started_at = time.monotonic()
 
@@ -303,6 +328,18 @@ class FOSCliDriver:
             self._logger.warning(
                 "Credentials were rejected; retrying with the previously accepted credentials"
             )
+            return
+        if self._use_recovery_credentials:
+            # Both credential sets can be rejected while a password change
+            # propagates. Keep _recovery_attempted set so this final attempt
+            # cannot start another recovery cycle if it is also rejected.
+            self._use_recovery_credentials = False
+            self._logger.warning(
+                "Previous credentials were rejected; waiting %s seconds before "
+                "retrying with the desired credentials",
+                self._credential_retry_delay_seconds,
+            )
+            time.sleep(self._credential_retry_delay_seconds)
             return
         raise RuntimeError("Credential rejected")
 

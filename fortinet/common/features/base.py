@@ -55,6 +55,10 @@ class Feature:
     def on_session_loss(self, attempt):
         return attempt.spec.session_loss
 
+    def on_context_loss(self, attempt):
+        """Choose whether the commander may replay this interrupted block."""
+        return attempt.spec.context_loss
+
     def reversal_blocks(self):
         """Return command blocks that completely reverse this feature's work."""
         return []

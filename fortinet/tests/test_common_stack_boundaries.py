@@ -40,11 +40,11 @@ class BoundaryFeature(Feature):
         return SessionLossAction.CONTINUE
 
 
-def make_stack(spec, response, *, allow_recovery=False):
+def make_stack(spec, response, *, allow_recovery=False, initial_prompt=b"fw #"):
     logger = MagicMock()
     connection = SerialConnection({
         b"admin\r": b"Password:",
-        b"secret\r": b"Welcome!\r\nfw #\r\n",
+        b"secret\r": b"Welcome!\r\n" + initial_prompt + b"\r\n",
         b"probe\r": response,
     })
     terminal = Terminal(connection, logger, default_wait="fw #")
@@ -83,7 +83,9 @@ def prompt_case(hostname, context, marker, ending):
         .encode()
     )
     spec = CommandSpec("probe", capture_output=True)
-    connection, terminal, commander, driver, feature, states = make_stack(spec, response)
+    connection, terminal, commander, driver, feature, states = make_stack(
+        spec, response, initial_prompt=prompt.encode()
+    )
     try:
         with patch("fortinet.common.fos_cli_driver.EXPECT_TIMEOUT_SECONDS", 0.05), \
                 patch("fortinet.common.fos_cli_driver.PROCESS_SPIN_SECONDS", 1):
@@ -100,9 +102,13 @@ def prompt_case(hostname, context, marker, ending):
 
 def state_case(state, sample, suffix=b"", *, recover=False):
     response = sample + suffix
-    if state in (FOSCliState.CREDENTIAL_REJECTED, FOSCliState.PROVIDE_USERNAME):
-        completion = (FOSCliState.CMD_PROMPT,)
-    elif state in (FOSCliState.CREDENTIAL_ACCEPTED, FOSCliState.SESSION_LOST, FOSCliState.CMD_PROMPT_ECHO):
+    if state in (
+        FOSCliState.CREDENTIAL_REJECTED,
+        FOSCliState.PROVIDE_USERNAME,
+        FOSCliState.CREDENTIAL_ACCEPTED,
+        FOSCliState.SESSION_LOST,
+        FOSCliState.CMD_PROMPT_ECHO,
+    ):
         completion = (FOSCliState.CMD_PROMPT,)
     else:
         completion = (state,)
@@ -110,6 +116,7 @@ def state_case(state, sample, suffix=b"", *, recover=False):
         CommandSpec("probe", completion_states=completion, capture_output=True),
         response,
         allow_recovery=recover,
+        initial_prompt=b"fw (global) #" if state == FOSCliState.CMD_PROMPT_ECHO else b"fw #",
     )
     try:
         with patch("fortinet.common.fos_cli_driver.EXPECT_TIMEOUT_SECONDS", 0.03), \
@@ -174,7 +181,7 @@ class EndToEndBoundaryCases(unittest.TestCase):
         finally:
             terminal.close()
 
-    def test_empty_connection_read_reaches_timeout_without_fabricating_output(self):
+    def test_idle_read_exposes_retained_prompt_newline(self):
         connection, terminal, commander, driver, feature, states = make_stack(
             CommandSpec("probe", capture_output=True), None
         )
@@ -183,7 +190,9 @@ class EndToEndBoundaryCases(unittest.TestCase):
                     patch("fortinet.common.fos_cli_driver.PROCESS_SPIN_SECONDS", 0.04):
                 driver.process_state()
             self.assertIn(FOSCliState.TN_TIMEOUT, states)
-            self.assertEqual(bytes(feature.current_attempt.output), b"")
+            # The login response ended with a newline after the matched CLI
+            # prompt. Full-buffer timeout inspection exposes that real byte.
+            self.assertEqual(bytes(feature.current_attempt.output), b"\n")
             self.assertTrue(commander.busy)
         finally:
             terminal.close()
@@ -193,7 +202,8 @@ class EndToEndBoundaryCases(unittest.TestCase):
         payload = b"config system dns\r\n set primary 1.1.1.1\r\nend\r\nfw (global) #\r\n"
         response = tuple([command_echo[:3], command_echo[3:12], command_echo[12:] + payload[:11], payload[11:29], payload[29:]])
         connection, terminal, commander, driver, feature, states = make_stack(
-            CommandSpec("probe", capture_output=True), response
+            CommandSpec("probe", capture_output=True), response,
+            initial_prompt=b"fw (global) #",
         )
         try:
             with patch("fortinet.common.fos_cli_driver.EXPECT_TIMEOUT_SECONDS", 0.05), \

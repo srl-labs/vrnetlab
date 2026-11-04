@@ -23,6 +23,7 @@ class FOSCliState(IntEnum):
     CHANGE_PASSWORD_CONFIRM = auto()
     MORE_PROMPT = auto()
     MULTILINE_PROMPT = auto()
+    KERNEL_PANIC = auto()
     UNKNOWN = auto()  # Non-patterns from here on.
     TN_TIMEOUT = auto()
 
@@ -62,6 +63,10 @@ FOS_CLI_STATE_PATTERNS[FOSCliState.CONFIRMATION.value] = rb"(?mi)Do you want to 
 FOS_CLI_STATE_PATTERNS[FOSCliState.CHANGE_PASSWORD_CONFIRM.value] = rb"(?mi)^Confirm Password:[ \t]*"
 FOS_CLI_STATE_PATTERNS[FOSCliState.MORE_PROMPT.value] = rb"--More--\s*"
 FOS_CLI_STATE_PATTERNS[FOSCliState.MULTILINE_PROMPT.value] = rb"(?m)^>[ \t]*\r?$"
+FOS_CLI_STATE_PATTERNS[FOSCliState.KERNEL_PANIC.value] = (
+    rb"(?mi)^Kernel panic(?: - not syncing)?:[^\r\n]*\r?\n"
+    rb"CPU: [0-9]+ PID: [0-9]+ Comm: [^\r\n]+"
+)
 
 DEF_POLICY_COMPLIANT_PASSWORD = "FortinetFOS1!"
 DEFAULT_USERNAME = "admin"

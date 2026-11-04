@@ -14,6 +14,11 @@ class SessionLossAction(Enum):
     FAIL = auto()
 
 
+class ContextLossAction(Enum):
+    RESTART_BLOCK = auto()
+    FAIL = auto()
+
+
 @dataclass(frozen=True, init=False)
 class CommandSpec:
     line: str
@@ -23,10 +28,13 @@ class CommandSpec:
     session_loss: SessionLossAction = SessionLossAction.RESTART_BLOCK
     expected_completion_state: object = None
     fail_on_error: bool = False
+    context_loss: ContextLossAction = ContextLossAction.RESTART_BLOCK
+    continuation: bool = False
 
     def __init__(self, line, completion_states=(), capture_output=False,
                  suppress_output=False, session_loss=SessionLossAction.RESTART_BLOCK,
-                 expected_completion_state=None, fail_on_error=False):
+                 expected_completion_state=None, fail_on_error=False,
+                 context_loss=None, continuation=False):
         object.__setattr__(self, "line", line)
         object.__setattr__(self, "completion_states", completion_states)
         object.__setattr__(self, "capture_output", capture_output)
@@ -34,11 +42,25 @@ class CommandSpec:
         object.__setattr__(self, "session_loss", session_loss)
         object.__setattr__(self, "expected_completion_state", expected_completion_state)
         object.__setattr__(self, "fail_on_error", fail_on_error)
+        object.__setattr__(self, "continuation", continuation)
+        if context_loss is None:
+            # Commands that must not replay after logout must not replay after
+            # an unexpected scope exit either. Features can override this policy.
+            context_loss = (
+                ContextLossAction.RESTART_BLOCK
+                if session_loss == SessionLossAction.RESTART_BLOCK
+                else ContextLossAction.FAIL
+            )
+        object.__setattr__(self, "context_loss", context_loss)
         self.__post_init__()
 
     def __post_init__(self):
         if "\r" in self.line or "\n" in self.line:
             raise ValueError("CLI commands must contain exactly one line")
+
+    @property
+    def closes_scope(self):
+        return not self.continuation and self.line.strip().lower() in {"next", "end"}
 
 
 @dataclass
@@ -47,9 +69,13 @@ class CommandAttempt:
     number: int
     session_epoch: int
     output: bytearray = field(default_factory=bytearray)
+    prompt_context_before: tuple | None = None
+    prompt_context_after: tuple | None = None
+    block_index: int | None = None
+    retry_count: int = 0
 
     def on_output(self, output):
-        if not self.spec.capture_output:
+        if not (self.spec.capture_output or self.spec.closes_scope):
             return False
         data = bytes(output)
         self.output.extend(data)
@@ -71,7 +97,7 @@ class Scope:
         raise NotImplementedError
 
     def flatten(self):
-        commands = [CommandSpec(self.open_line)]
+        commands = flatten_commands(self.open_line)
         for child in self.children:
             commands.extend(flatten_commands(child))
         commands.append(CommandSpec(self.close_line))
@@ -109,45 +135,39 @@ class SetValue:
 
     def flatten(self):
         lines = str(self.value).strip().splitlines() or [""]
-        if len(lines) == 1:
-            return [CommandSpec(
-                f'set {self.field} "{lines[0]}"',
-                capture_output=True,
-                expected_completion_state=(
-                    FOSCliState.CMD_PROMPT if self.validate_prompt else None
-                ),
-                fail_on_error=self.fail_on_error,
-            )]
+        lines[0] = f'set {self.field} "{lines[0]}'
+        lines[-1] += '"'
+        return _flatten_quoted_lines(
+            lines, fail_on_error=self.fail_on_error,
+            validate_prompt=self.validate_prompt,
+        )
 
-        both_prompts = (FOSCliState.MULTILINE_PROMPT, FOSCliState.CMD_PROMPT)
-        commands = [CommandSpec(
-            f'set {self.field} "{lines[0]}',
-            completion_states=both_prompts,
-            capture_output=True,
-            expected_completion_state=(
-                FOSCliState.MULTILINE_PROMPT if self.validate_prompt else None
-            ),
-            fail_on_error=self.fail_on_error,
-        )]
-        commands.extend(CommandSpec(
-            line,
-            completion_states=both_prompts,
-            capture_output=True,
-            expected_completion_state=(
-                FOSCliState.MULTILINE_PROMPT if self.validate_prompt else None
-            ),
-            fail_on_error=self.fail_on_error,
-        ) for line in lines[1:-1])
+
+def _flatten_quoted_lines(lines, *, fail_on_error=False, validate_prompt=True):
+    """Send a logical command one line per continuation prompt, without re-quoting."""
+    commands = []
+    for index, line in enumerate(lines):
+        last_line = index == len(lines) - 1
+        expected = (
+            FOSCliState.CMD_PROMPT if last_line
+            else FOSCliState.MULTILINE_PROMPT
+        )
+        completion_states = ()
+        if len(lines) > 1:
+            completion_states = (
+                (FOSCliState.CMD_PROMPT, FOSCliState.MULTILINE_PROMPT)
+                if last_line else
+                (FOSCliState.MULTILINE_PROMPT, FOSCliState.CMD_PROMPT)
+            )
         commands.append(CommandSpec(
-            f'{lines[-1]}"',
-            completion_states=(FOSCliState.CMD_PROMPT, FOSCliState.MULTILINE_PROMPT),
+            line,
+            completion_states=completion_states,
             capture_output=True,
-            expected_completion_state=(
-                FOSCliState.CMD_PROMPT if self.validate_prompt else None
-            ),
-            fail_on_error=self.fail_on_error,
+            expected_completion_state=expected if validate_prompt else None,
+            fail_on_error=fail_on_error,
+            continuation=index > 0,
         ))
-        return commands
+    return commands
 
 
 class CommandSequence:
@@ -167,6 +187,8 @@ class CommandSequence:
 def flatten_commands(value):
     """Flatten command containers and wrap plain CLI lines with defaults."""
     if isinstance(value, str):
+        if "\n" in value:
+            return _flatten_quoted_lines(value.split("\n"))
         return [CommandSpec(value)]
     if isinstance(value, CommandSpec):
         return [value]
