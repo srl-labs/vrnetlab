@@ -1,4 +1,5 @@
 import logging
+import math
 import re
 import time
 from .common import (
@@ -8,12 +9,14 @@ from .common import (
     PROMPT_CONTEXT_REGEX,
     TRACE_LEVEL,
 )
+from .env import get_env
 
 
 PROCESS_SPIN_SECONDS = 10
 EXPECT_TIMEOUT_SECONDS = 1
 UNKNOWN_STALL_SECONDS = 30
 UNKNOWN_STALL_NEWLINE_LIMIT = 3
+CREDENTIAL_RETRY_DELAY_SECONDS = 3
 
 
 class KernelPanicError(RuntimeError):
@@ -47,6 +50,16 @@ class FOSCliDriver:
         self._activate_blank_credentials = activate_blank_credentials
         self._activate_bootstrap_credentials = activate_bootstrap_credentials
         self._allow_credential_recovery = allow_credential_recovery
+        self._credential_retry_delay_seconds = float(
+            get_env("FTNT_NEW_CREDENTIAL_REJECTED_RETRY_TIMEOUT")
+            or CREDENTIAL_RETRY_DELAY_SECONDS
+        )
+        if (not math.isfinite(self._credential_retry_delay_seconds)
+                or self._credential_retry_delay_seconds < 0):
+            raise ValueError(
+                "FTNT_NEW_CREDENTIAL_REJECTED_RETRY_TIMEOUT must be a finite "
+                "non-negative number of seconds"
+            )
         self._recovery_credentials = None
         self._recovery_attempted = False
         self._use_recovery_credentials = False
@@ -315,6 +328,18 @@ class FOSCliDriver:
             self._logger.warning(
                 "Credentials were rejected; retrying with the previously accepted credentials"
             )
+            return
+        if self._use_recovery_credentials:
+            # Both credential sets can be rejected while a password change
+            # propagates. Keep _recovery_attempted set so this final attempt
+            # cannot start another recovery cycle if it is also rejected.
+            self._use_recovery_credentials = False
+            self._logger.warning(
+                "Previous credentials were rejected; waiting %s seconds before "
+                "retrying with the desired credentials",
+                self._credential_retry_delay_seconds,
+            )
+            time.sleep(self._credential_retry_delay_seconds)
             return
         raise RuntimeError("Credential rejected")
 

@@ -143,11 +143,60 @@ class AdminCredentialsTests(unittest.TestCase):
 
     def test_rejected_credentials_do_not_start_later_features(self):
         conn, _, driver, admin, _ = self.make_stack(reject=True)
-        with self.assertRaisesRegex(RuntimeError, "Credential rejected"):
+        writes_at_wait = []
+        with patch("fortinet.common.fos_cli_driver.time.sleep",
+                   side_effect=lambda _: writes_at_wait.append(list(conn.writes))) as sleep, \
+                self.assertRaisesRegex(RuntimeError, "Credential rejected"):
             self.run_driver(driver)
+        sleep.assert_called_once_with(3)
+        logout = conn.writes.index(b"exit\r")
+        self.assertEqual(writes_at_wait[0][logout + 1:], [
+            b"admin\r", b"newpass\r", b"admin\r", b"oldpass\r",
+        ])
+        self.assertEqual(conn.writes[logout + 1:], [
+            b"admin\r", b"newpass\r", b"admin\r", b"oldpass\r",
+            b"admin\r", b"newpass\r",
+        ])
         self.assertFalse(admin.completed)
         self.assertNotIn(b"probe\r", conn.writes)
         self.assertEqual(conn.writes.count(b"set password newpass\r"), 1)
+
+    def test_retry_desired_credentials_after_previous_credentials_are_rejected(self):
+        for username, password, timeout in (
+            ("admin", "newpass", None),
+            ("admin", "", "0"),
+            ("operator", "newpass", "0.25"),
+            ("admin", "newpass", "7"),
+        ):
+            env = {} if timeout is None else {
+                "FTNT_NEW_CREDENTIAL_REJECTED_RETRY_TIMEOUT": timeout,
+            }
+            with self.subTest(username=username, password_set=bool(password), timeout=timeout), \
+                    patch.dict("os.environ", env, clear=True):
+                conn, cmd, driver, admin, following = self.make_stack(
+                    username=username, password=password,
+                )
+                desired_password = (password + "\r").encode()
+                replies = [b"Login incorrect\r\n" + LOGIN, READY]
+                conn._responses[desired_password] = lambda: replies.pop(0)
+                writes_at_wait = []
+                with patch("fortinet.common.fos_cli_driver.time.sleep",
+                           side_effect=lambda _: writes_at_wait.append(list(conn.writes))) as sleep:
+                    self.run_driver(driver)
+                sleep.assert_called_once_with(3 if timeout is None else float(timeout))
+                logout = conn.writes.index(b"exit\r")
+                desired_username = (username + "\r").encode()
+                before_wait = [
+                    desired_username, desired_password, b"admin\r", b"oldpass\r",
+                ]
+                self.assertEqual(writes_at_wait[0][logout + 1:], before_wait)
+                self.assertEqual(conn.writes[logout + 1:], before_wait + [
+                    desired_username, desired_password, b"probe\r",
+                ])
+                self.assertTrue(cmd.ready)
+                self.assertTrue(admin.completed)
+                self.assertTrue(following.completed)
+                self.assertFalse(cmd.feature_errors)
 
 
 if __name__ == "__main__":

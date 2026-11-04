@@ -248,6 +248,14 @@ class DriverTests(unittest.TestCase):
         driver._credential_accepted()
         commander.resolve_feature_error.assert_called_once()
 
+    def test_invalid_credential_retry_timeout_is_rejected(self):
+        for value in ("-1", "nan", "inf", "-inf", "invalid"):
+            with self.subTest(value=value), patch.dict("os.environ", {
+                "FTNT_NEW_CREDENTIAL_REJECTED_RETRY_TIMEOUT": value,
+            }, clear=True):
+                with self.assertRaises(ValueError):
+                    self.make_driver()
+
     def test_rejected_and_recovery_credential_branches(self):
         driver, terminal, commander, logger, blank, bootstrap = self.make_driver()
         driver._initial_login_complete = True

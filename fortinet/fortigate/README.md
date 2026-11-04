@@ -100,6 +100,7 @@ no configured nameservers, the defaults are `1.1.1.1` and `8.8.8.8`.
 | `FTNT_LOG_LICENSE_STATUS_OUTPUT` | `false` | `true`, `false` | When `true`, logs the first full `get system status` response captured for each distinct license status. Useful for diagnosing license-status parsing. |
 | `FTNT_LICENSE_STATUS_TIMEOUT_SECONDS` | `120` | seconds | Maximum time to poll `get system status` while waiting for license validation. `Pending` is always retried; `Grace Period` is retried only when `FTNT_WAIT_FOR_VALID_LICENSE=true`. |
 | `FTNT_LOG_LEVEL` | `DEBUG` | `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, or numeric Python log level | Sets launcher log verbosity. |
+| `FTNT_NEW_CREDENTIAL_REJECTED_RETRY_TIMEOUT` | `3` | finite non-negative seconds, decimals allowed | Delay before the final retry with new credentials after both the new and previously accepted credentials are rejected. Set to `0` to retry immediately. |
 | `FTNT_NO_ENC_CONFIG` | `false` | `true`, `false` | When `true`, ignores ENC-only changes on entries that already exist in the baseline. New entries and entries with other changes retain their encrypted fields. |
 | `FTNT_ONBOARDING` | `false` | `true`, `false` | When `true`, disables the HTTPS redirect and automatic-upgrade setup warning in the default FortiOS GUI configuration. |
 | `FTNT_SKIP_PRODUCT_CHECK` | `false` | `true`, `false` | Skips validation that the image reports the expected product family and satisfies `FTNT_PRODUCT_VERSION`. General FortiOS version detection still runs during bootstrap. |
