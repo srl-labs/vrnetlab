@@ -110,10 +110,10 @@ DEFAULT_PASSWORD = "Switch@123"
 GENERIC_VM_USER = "clab"
 GENERIC_VM_PASSWORD = "clab@123"
 STARTUP_CONFIG_PATHS = ["/config/startup-config.cfg", "/startup-config.cfg"]
-# "containerlab save" (ale_vaos kind) drops SAVE_REQUEST in the mounted config
-# dir. launch.py then runs "write memory flash-synchro", stores
-# "show configuration snapshot" in SAVED_CONFIG and writes "ok" (or the error)
-# in SAVE_DONE, which containerlab waits for.
+# "containerlab save" (ale_vaos kind) drops SAVE_REQUEST, holding a token, in the
+# mounted config dir. launch.py then runs "write memory flash-synchro", stores
+# "show configuration snapshot" in SAVED_CONFIG and writes "<token> ok" (or
+# "<token> <error>") in SAVE_DONE, which containerlab waits for.
 SAVE_REQUEST = "/config/.vaos-save-request"
 SAVE_DONE = "/config/.vaos-save-done"
 SAVED_CONFIG = "/config/startup-config.cfg"
@@ -301,9 +301,11 @@ class VAOS_vm(vrnetlab.VM):
         """Save the configuration and store a snapshot for containerlab save."""
         self.logger.info("containerlab save requested")
         try:
+            with open(SAVE_REQUEST) as f:
+                token = f.read().strip()
             os.remove(SAVE_REQUEST)
         except OSError:
-            pass
+            token = ""
         result = "ok"
         try:
             self.tn.open()
@@ -333,8 +335,10 @@ class VAOS_vm(vrnetlab.VM):
                 self.tn.close()
             except Exception:
                 pass
-            with open(SAVE_DONE, "w") as f:
-                f.write(result + "\n")
+            # write then rename, so containerlab never reads a partial file
+            with open(SAVE_DONE + ".tmp", "w") as f:
+                f.write("%s %s\n" % (token, result))
+            os.replace(SAVE_DONE + ".tmp", SAVE_DONE)
 
     @staticmethod
     def _extract_snapshot(buf):

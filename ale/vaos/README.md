@@ -96,9 +96,10 @@ Optional environment variables:
 ### Saving the configuration
 
 With the containerlab `ale_vaos` kind, `containerlab save` creates
-`/config/.vaos-save-request`. The launcher then runs `write memory flash-synchro`,
-writes `show configuration snapshot` to `/config/startup-config.cfg` and reports
-the result in `/config/.vaos-save-done`.
+`/config/.vaos-save-request` with a token. The launcher then runs
+`write memory flash-synchro`, writes `show configuration snapshot` to
+`/config/startup-config.cfg` and reports the result, prefixed with the token, in
+`/config/.vaos-save-done`.
 
 ### Serial console
 
