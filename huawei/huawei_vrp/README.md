@@ -28,12 +28,16 @@ vrnetlab/huawei_vrp:ne40e-8.180
 
 ## eNSP images
 
-Disk images shipped with eNSP (`NE40E.zip`, `CE.zip`, ... each containing a
-VirtualBox disk) can be used as well. They do not start VRP on their own: in
-eNSP a control service inside the VM (`svrp_agent.sh`) creates and starts the
-router on request from the GUI. `ensp/convert.sh` replaces it with a boot
-script (`ensp/rc.local`) and produces a regular
-`huawei_<platform>-<version>.qcow2`.
+eNSP (Enterprise Network Simulation Platform) is Huawei's network simulator
+for training and lab use, no longer maintained by Huawei. eNSP
+V100R003C00SPC100 distributes its VRP8 devices as separate device packages:
+`NE40E.zip`, `NE5000E.zip`, `NE9000.zip`, `CX.zip` and `CE.zip`, each
+containing a single VirtualBox disk (`NE40E.img`, `CE.img`, ...).
+
+These disks do not start VRP on their own: in eNSP a control service inside
+the VM (`svrp_agent.sh`) creates and starts the router on request from the
+GUI. `ensp/convert.sh` replaces it with a boot script (`ensp/rc.local`) and
+produces a regular `huawei_<platform>-<version>.qcow2`.
 
 Put the zip files (or the extracted `.vdi`) in this directory and run `make`
 as usual. Each image is converted once, a `.<name>.converted` stamp file marks
