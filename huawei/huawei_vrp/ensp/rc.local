@@ -76,6 +76,17 @@ if [ -n "$lpu" ]; then
 	' "$pool/io/board_cfg.xml" > "/opt/svrp/router1/$lpu/board_cfg.xml"
 fi
 
+# The system MAC is derived from MAC_OFFSET ("high.low"). NE images compute it
+# in start_svrp.sh from a number kept in mac.stash and initialised from
+# $RANDOM, CE images do not set it at all. Identical VMs boot identically and
+# would all get the same MAC, so seed both from the management MAC instead.
+if [ ! -f /opt/svrp/mac.stash ]; then
+	seed=$(md5sum </sys/class/net/eth0/address | cut -c1-4)
+	echo $((0x$seed & 32767)) >/opt/svrp/mac.stash
+fi
+seed=$(cat /opt/svrp/mac.stash)
+export MAC_OFFSET=$((seed >> 8)).$((seed & 255))
+
 cd /opt/svrp
 setsid ./start_svrp.sh router1 </dev/null >/var/log/svrp_start.log 2>&1 &
 

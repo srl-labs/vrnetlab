@@ -67,6 +67,10 @@ Notes:
   and `undo shutdown` before assigning an address. On this version a few
   `ssh client` bootstrap commands are rejected, this does not affect access
   to the node.
+* Nodes built from the same image get different interface MAC addresses.
+  The CE12800 bridge MAC (`display bridge mac-address`) is still the same on
+  every node, set `stp priority` explicitly when several CE12800 nodes form
+  a layer 2 topology.
 * USG6000V and the VRP5 devices (AR, S3700, S5700, USG5500) are not
   supported: the former gets its interfaces from the eNSP control service,
   the latter are Windows programs and are not shipped as disk images.
