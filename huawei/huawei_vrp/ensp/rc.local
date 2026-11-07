@@ -1,0 +1,92 @@
+#!/bin/sh
+#
+# Boot-time startup of VRP for eNSP-derived images.
+#
+# In eNSP the VRP instance is created and started by a control service
+# (svrp_agent.sh) on request from the eNSP GUI. This script does the same on
+# its own, so the VM comes up as a standalone router:
+#
+#   eth0                 -> GigabitEthernet0/0/0 (management, MPU board)
+#   other NICs           -> ports of the first LPU card, in PCI order,
+#                           ports without a NIC stay down
+#   /dev/ttyS0           <-> VRP console (tcp/20000)
+#
+# NICs with a 0c:00:* MAC address are vrnetlab's own (management and the
+# vrp-dummy interface) and are not mapped to LPU ports.
+
+LOG=/var/log/vrnetlab.log
+CONSOLE_PORT=20000
+
+exec >>"$LOG" 2>&1
+echo "--- boot $(date)"
+
+# Keep the host OS silent on the data plane links.
+sysctl -q -w net.ipv6.conf.all.disable_ipv6=1
+sysctl -q -w net.ipv6.conf.default.disable_ipv6=1
+
+insmod /lib/modules/$(uname -r)/kernel/drivers/block/loop.ko max_loop=64
+ifconfig lo 127.0.0.1 up
+
+for rpg in $(find /opt/v8pkgpool -name '*.rpg'); do
+	dir=$(dirname "$rpg")
+	mountpoint -q "$dir/rpg" || mount -o loop "$rpg" "$dir/rpg"
+done
+
+# Product type (ne40e, ne5ke, ...) and its package pool.
+pkg=$(ls /opt/v8pkgpool/v8_current_pkg.* | head -1)
+product=${pkg##*.}
+pool=$(ls -d /opt/v8pkgpool/*/"$product" | head -1)
+
+mpu=$(awk '$1 == "mmb" || $1 == "mb" { print $2; exit }' "$pool/router/router.cfg")
+lpu=$(awk '$1 == "lc" { print $2; exit }' "$pool/router/router.cfg")
+echo "product=$product mpu=$mpu lpu=$lpu"
+
+if [ ! -d /opt/svrp/router1 ]; then
+	cd /opt
+	./svrp_agent.sh add "router1/$mpu" "$product"
+	[ -n "$lpu" ] && ./svrp_agent.sh add "router1/$lpu" "$product"
+fi
+
+data_nics=""
+for nic in $(for n in /sys/class/net/eth*; do
+		echo "$(readlink -f "$n/device") ${n##*/}"
+	done | sort | awk '{ print $2 }'); do
+	[ "$nic" = eth0 ] && continue
+	case $(cat "/sys/class/net/$nic/address") in
+		0c:00:*) continue ;;
+	esac
+	data_nics="$data_nics $nic"
+done
+echo "data nics:$data_nics"
+
+for nic in $(ls /sys/class/net | grep '^eth'); do
+	ip link set "$nic" promisc on up
+done
+
+# Regenerate the LPU port map on every boot, NIC names may change.
+if [ -n "$lpu" ]; then
+	awk -v nics="$data_nics" '
+		BEGIN { n = split(nics, nic, " "); port = 1; card = -1 }
+		/<Card / { card++ }
+		card == 0 && /iface="[^"]*"/ {
+			sub(/iface="[^"]*"/, "iface=\"" (port <= n ? nic[port] : "none") "\"")
+			port++
+		}
+		{ print }
+	' "$pool/io/board_cfg.xml" > "/opt/svrp/router1/$lpu/board_cfg.xml"
+fi
+
+cd /opt/svrp
+setsid ./start_svrp.sh router1 </dev/null >/var/log/svrp_start.log 2>&1 &
+
+stty -F /dev/ttyS0 115200 raw -echo
+(
+	while true; do
+		if netstat -lnt | grep -q ":$CONSOLE_PORT "; then
+			nc6 -4 127.0.0.1 "$CONSOLE_PORT" </dev/ttyS0 >/dev/ttyS0 2>/dev/null
+		fi
+		sleep 2
+	done
+) &
+
+exit 0
