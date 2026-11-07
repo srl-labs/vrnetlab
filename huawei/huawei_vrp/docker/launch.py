@@ -12,6 +12,9 @@ import vrnetlab
 
 STARTUP_CONFIG_FILE = "/config/startup-config.cfg"
 
+# Router platforms that share the NE40E management port and bootstrap
+NE_PLATFORMS = ("NE40E", "NE5000E", "NE9000", "CX")
+
 
 def handle_SIGCHLD(signal, frame):
     os.waitpid(-1, os.WNOHANG)
@@ -47,10 +50,9 @@ class VRP_vm(vrnetlab.VM):
         for e in sorted(os.listdir("/")):
             if not disk_image and re.search(".qcow2$", e):
                 disk_image = "/" + e
-                if "huawei_ne40e" in e:
-                    self.vm_type = "NE40E"
-                if "huawei_ce12800" in e:
-                    self.vm_type = "CE12800"
+                m = re.match(r"huawei_([a-z0-9]+)-", e)
+                if m:
+                    self.vm_type = m.group(1).upper()
 
                 # try to detect VRP version from filename (qcow images should contain strings like V800R011,V800R022,V800R023)
                 m = re.search(r"(V\d+R\d+)", e)
@@ -210,7 +212,7 @@ class VRP_vm(vrnetlab.VM):
         self.wait_write(cmd="quit", wait="]")
         if self.vm_type == "CE12800":
             mgmt_interface = "MEth"
-        if self.vm_type == "NE40E":
+        if self.vm_type in NE_PLATFORMS:
             mgmt_interface = "GigabitEthernet"
         self.wait_write(cmd=f"interface {mgmt_interface} 0/0/0", wait="]")
         # NOTE: 'clear configuration this' on V800R023 in mmi-mode deadlocks the
@@ -218,7 +220,7 @@ class VRP_vm(vrnetlab.VM):
         # the worker thread never returns). It is only meant to wipe any default
         # config off the freshly-booted mgmt interface, which is unnecessary
         # here, so skip it on NE40E and configure the interface directly.
-        if self.vm_type != "NE40E":
+        if self.vm_type not in NE_PLATFORMS:
             self.wait_write(cmd="clear configuration this", wait=None)
             self.tn.read_until(b"Error", 3)
         self.wait_write(cmd="undo shutdown", wait=None)
@@ -273,7 +275,7 @@ class VRP_vm(vrnetlab.VM):
             self.wait_write(cmd="aaa", wait="]")
             self.wait_write(cmd="undo local-user policy security-enhance", wait="]")
             self.wait_write(cmd="quit", wait="]")
-        if self.vm_type == "NE40E":
+        if self.vm_type in NE_PLATFORMS:
             self.wait_write(cmd="undo user-security-policy enable", wait="]")
             self.wait_write(cmd="undo dcn", wait="]")
 
