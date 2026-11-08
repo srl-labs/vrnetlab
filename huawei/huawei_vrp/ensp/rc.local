@@ -30,6 +30,11 @@ ifconfig lo 127.0.0.1 up
 for rpg in $(find /opt/v8pkgpool -name '*.rpg'); do
 	dir=$(dirname "$rpg")
 	mountpoint -q "$dir/rpg" || mount -o loop "$rpg" "$dir/rpg"
+	# forwarding engine patched by convert.sh (patch_sfe.py)
+	sfe=$dir/rpg/module/libsfe.so
+	if [ -f /etc/data/libsfe.so ] && [ -f "$sfe" ] && ! mountpoint -q "$sfe"; then
+		mount --bind /etc/data/libsfe.so "$sfe"
+	fi
 done
 
 # Product type (ne40e, ne5ke, ...) and its package pool.

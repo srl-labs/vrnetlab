@@ -29,7 +29,7 @@ die() {
 }
 
 [ $# -ge 1 ] && [ -f "$1" ] || die "usage: $0 <image> [output-dir]"
-for tool in qemu-img debugfs sfdisk jq python3 curl ar xz; do
+for tool in qemu-img debugfs sfdisk jq python3 curl ar xz unsquashfs; do
 	command -v "$tool" >/dev/null || die "$tool is required"
 done
 
@@ -91,6 +91,25 @@ s6800 | s12800) platform=ce12800 ;;
 esac
 echo "Found $platform $version"
 
+# Patch the forwarding engine so ARP broadcasts are bridged in bridge
+# domains with a VBDIF interface, see patch_sfe.py. The library lives in the
+# VRP package (squashfs), the patched copy is bind mounted over it on boot.
+sfe_cmds=
+for rpg in $(debugfs -R "ls -p /opt/v8pkgpool/$package/$product" "$work/root.raw" 2>/dev/null |
+	awk -F/ '$6 ~ /\.rpg$/ { print $6 }'); do
+	debugfs -R "dump /opt/v8pkgpool/$package/$product/$rpg $work/vrp.rpg" "$work/root.raw" 2>/dev/null
+	unsquashfs -q -n -d "$work/rpg" "$work/vrp.rpg" module/libsfe.so >/dev/null 2>&1 || true
+	rm -f "$work/vrp.rpg"
+done
+if [ -f "$work/rpg/module/libsfe.so" ] &&
+	python3 -I "$SCRIPT_DIR/patch_sfe.py" "$work/rpg/module/libsfe.so" "$work/libsfe.so"; then
+	sfe_cmds="write $work/libsfe.so /etc/data/libsfe.so
+sif /etc/data/libsfe.so mode 0100644"
+	echo "Patched libsfe.so"
+else
+	echo "WARNING: libsfe.so not patched, ARP is not flooded in bridge domains with a VBDIF" >&2
+fi
+
 # The original rc.local verifies md5 sums of a few system files, including
 # itself, and halts the VM on mismatch. Update the sum for our rc.local.
 fs_cat /etc/data/cfgfile.list >"$work/cfgfile.list"
@@ -111,8 +130,11 @@ sif /etc/data/rc.local mode 0100755
 rm /etc/data/cfgfile.list
 write $work/cfgfile.list /etc/data/cfgfile.list
 sif /etc/data/cfgfile.list mode 0100644
+$sfe_cmds
 EOF
 fs_cat /etc/data/rc.local | cmp -s - "$RC_LOCAL" || die "failed to install rc.local"
+[ -z "$sfe_cmds" ] || fs_cat /etc/data/libsfe.so | cmp -s - "$work/libsfe.so" ||
+	die "failed to install libsfe.so"
 debugfs -R "stat /usr/lib/libpcap.so.1" "$work/root.raw" 2>/dev/null |
 	grep -q "Fast link dest: \"$LIBPCAP_SO\"" || die "failed to install $LIBPCAP_SO"
 

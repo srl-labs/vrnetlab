@@ -49,13 +49,21 @@ it as done. The script can also be run by hand:
 
 The disk is modified offline with `debugfs`, root is not required. The
 script needs `qemu-img`, `debugfs` (e2fsprogs), `sfdisk`, `jq`, `python3`,
-`curl`, `ar` (binutils) and `xz`.
+`curl`, `ar` (binutils), `xz` and `unsquashfs` (squashfs-tools).
 
 The libpcap shipped in the images is too old to pass 802.1Q tagged frames to
 VRP, so it is replaced with `libpcap0.8_1.6.2-2_i386.deb` from Debian 8
 (the release the images are based on). The package is downloaded from
 archive.debian.org on the first conversion and its checksum is verified. To
 build offline, put the file in this directory beforehand.
+
+The forwarding engine of the images (`libsfe.so`) does not flood broadcast
+frames received in a bridge domain that has a VBDIF interface, they are only
+passed to the VBDIF. ARP between hosts of such a bridge domain fails, both
+locally and over VXLAN. The conversion patches the library so that ARP
+broadcasts are bridged and a copy is passed to the VBDIF, as the engine
+already does for VLANIF interfaces (`ensp/patch_sfe.py`). Other broadcast and
+multicast frames are still not flooded in these bridge domains.
 
 Tested images:
 
@@ -89,6 +97,10 @@ Notes:
   traffic to their VLANIF interfaces fails; switching of other traffic
   works. Routed ports (`undo portswitch`) get their own MAC addresses, use
   them between CE12800 nodes.
+* On NE40E, NE5000E, NE9000 and CX a MAC address learned in two bridge
+  domains (for example a server with VLAN sub-interfaces on one bond) may be
+  forwarded with the VXLAN VNI of the other bridge domain. Give such
+  sub-interfaces their own MAC addresses.
 * USG6000V and the VRP5 devices (AR, S3700, S5700, USG5500) are not
   supported: the former gets its interfaces from the eNSP control service,
   the latter are Windows programs and are not shipped as disk images.
