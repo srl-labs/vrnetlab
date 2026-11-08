@@ -210,6 +210,14 @@ class VRP_vm(vrnetlab.VM):
             "bootstrap_mgmt_interface - Sleeping for another 60s to wait for the system to become ready...()"
         )
         time.sleep(60)
+        # The CLI can take longer than that to start after a reboot. Anything
+        # typed before the user prompt is lost, and without mmi-mode prompts
+        # like the one of "undo dcn" break the bootstrap and nothing is
+        # committed.
+        for _ in range(30):
+            self.tn.write(b"\r")
+            if b">" in self.tn.read_until(b">", 10):
+                break
         self.wait_write(cmd="mmi-mode enable", wait=None)
         self.wait_write(cmd="system-view", wait=">")
         self.wait_write(cmd="ip vpn-instance __MGMT_VPN__", wait="]")
