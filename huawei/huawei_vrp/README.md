@@ -74,8 +74,8 @@ Notes:
 * The node is healthy after 5 to 7 minutes (CE12800 about 2.5 minutes).
   Right after boot `commit` may fail with `The system is busy in building
   system configurations`, retry after a minute.
-* CE12800 ports are layer 2 and shut down by default, use `undo portswitch`
-  and `undo shutdown` before assigning an address. On this version a few
+* CE12800 ports are layer 2 and shut down by default. Use `undo shutdown`
+  and either a VLANIF interface or `undo portswitch` for a routed port. On this version a few
   `ssh client` bootstrap commands are rejected, this does not affect access
   to the node.
 * NE40E, NE5000E, NE9000 and CX generate the system MAC (LLDP chassis ID)
@@ -84,9 +84,11 @@ Notes:
   of a 2 minute cycle, taken from the container address (modulo 30). Boot
   takes up to 2 minutes longer. Nodes whose addresses differ by a multiple
   of 30 may still share the system MAC.
-* The CE12800 system MAC (`3864-0111-1200`) is the same on every node.
-  Routed ports (`undo portswitch`) get their own MAC addresses and work
-  between CE12800 nodes, VLANIF interfaces between them do not.
+* The CE12800 system MAC (`3864-0111-1200`) is the same on every node and
+  VLANIF interfaces use it. When two CE12800 nodes share a layer 2 domain,
+  traffic to their VLANIF interfaces fails; switching of other traffic
+  works. Routed ports (`undo portswitch`) get their own MAC addresses, use
+  them between CE12800 nodes.
 * USG6000V and the VRP5 devices (AR, S3700, S5700, USG5500) are not
   supported: the former gets its interfaces from the eNSP control service,
   the latter are Windows programs and are not shipped as disk images.

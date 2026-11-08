@@ -64,12 +64,20 @@ for nic in $(ls /sys/class/net | grep '^eth'); do
 done
 
 # Regenerate the LPU port map on every boot, NIC names may change.
+#
+# Without a filter attribute svrp_drv only passes frames sent to the port MAC
+# (pcap filter "ether dst <mac> || ..."), which breaks VLANIF interfaces and
+# any switching through the node. Pass everything received instead.
 if [ -n "$lpu" ]; then
 	awk -v nics="$data_nics" '
 		BEGIN { n = split(nics, nic, " "); port = 1; card = -1 }
 		/<Card / { card++ }
 		card == 0 && /iface="[^"]*"/ {
-			sub(/iface="[^"]*"/, "iface=\"" (port <= n ? nic[port] : "none") "\"")
+			if (port <= n)
+				attr = "iface=\"" nic[port] "\" filter=\"inbound\""
+			else
+				attr = "iface=\"none\""
+			sub(/iface="[^"]*"/, attr)
 			port++
 		}
 		{ print }
