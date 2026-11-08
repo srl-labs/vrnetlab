@@ -90,6 +90,15 @@ class VRP_vm(vrnetlab.VM):
             ]
         )
 
+        # eNSP images pick the time slot VRP is started in from the serial
+        # number (see ensp/rc.local), the container address keeps it
+        # different for every node of a lab.
+        try:
+            mgmt_ipv4 = self.get_mgmt_address()[0].split("/")[0]
+            self.smbios.append(f"type=1,serial={mgmt_ipv4}")
+        except (ValueError, IndexError, KeyError):
+            pass
+
         self.hostname = hostname
         self.conn_mode = conn_mode
         self.num_nics = 14

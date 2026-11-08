@@ -64,17 +64,22 @@ Data ports map to `eth1` to `eth10` of the container in order.
 
 Notes:
 
-* The node is healthy after about 5 minutes (CE12800 about 2.5 minutes).
+* The node is healthy after 5 to 7 minutes (CE12800 about 2.5 minutes).
   Right after boot `commit` may fail with `The system is busy in building
   system configurations`, retry after a minute.
 * CE12800 ports are layer 2 and shut down by default, use `undo portswitch`
   and `undo shutdown` before assigning an address. On this version a few
   `ssh client` bootstrap commands are rejected, this does not affect access
   to the node.
-* Nodes built from the same image get different interface MAC addresses.
-  The CE12800 bridge MAC (`display bridge mac-address`) is still the same on
-  every node, set `stp priority` explicitly when several CE12800 nodes form
-  a layer 2 topology.
+* NE40E, NE5000E, NE9000 and CX generate the system MAC (LLDP chassis ID)
+  from the time VRP starts and pick a new one on every reboot. So that nodes
+  of a lab get different ones, each node starts VRP in its own 4 second slot
+  of a 2 minute cycle, taken from the container address (modulo 30). Boot
+  takes up to 2 minutes longer. Nodes whose addresses differ by a multiple
+  of 30 may still share the system MAC.
+* The CE12800 system MAC (`3864-0111-1200`) is the same on every node.
+  Routed ports (`undo portswitch`) get their own MAC addresses and work
+  between CE12800 nodes, VLANIF interfaces between them do not.
 * USG6000V and the VRP5 devices (AR, S3700, S5700, USG5500) are not
   supported: the former gets its interfaces from the eNSP control service,
   the latter are Windows programs and are not shipped as disk images.

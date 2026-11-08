@@ -76,16 +76,40 @@ if [ -n "$lpu" ]; then
 	' "$pool/io/board_cfg.xml" > "/opt/svrp/router1/$lpu/board_cfg.xml"
 fi
 
-# The system MAC is derived from MAC_OFFSET ("high.low"). NE images compute it
-# in start_svrp.sh from a number kept in mac.stash and initialised from
-# $RANDOM, CE images do not set it at all. Identical VMs boot identically and
-# would all get the same MAC, so seed both from the management MAC instead.
+# Interface MAC addresses are derived from MAC_OFFSET ("high.low"), which
+# start_svrp.sh takes from a number kept in mac.stash and initialised from
+# $RANDOM. Identical VMs boot identically and would all get the same addresses,
+# so seed it from the management MAC instead.
 if [ ! -f /opt/svrp/mac.stash ]; then
 	seed=$(md5sum </sys/class/net/eth0/address | cut -c1-4)
 	echo $((0x$seed & 32767)) >/opt/svrp/mac.stash
 fi
 seed=$(cat /opt/svrp/mac.stash)
 export MAC_OFFSET=$((seed >> 8)).$((seed & 255))
+
+# NE images generate the system MAC (LLDP chassis ID) from the time VRP
+# starts, nodes started within the same second get the same one. Start each
+# node in its own 4 second slot of a 2 minute cycle, picked from the serial
+# number (launch.py sets it to the container address) or from the management
+# MAC. The slots are wide because VRP reads the time a few seconds after
+# start_svrp.sh, depending on the platform and load. CE images use a fixed
+# system MAC, waiting does not help there.
+case $product in
+s6800|s12800)
+	;;
+*)
+	serial=$(cat /sys/class/dmi/id/product_serial 2>/dev/null)
+	case $serial in
+	*.*.*.*) n=$(echo "$serial" | awk -F. '{ print $3 * 256 + $4 }') ;;
+	*) n=$((0x$(md5sum </sys/class/net/eth0/address | cut -c5-8))) ;;
+	esac
+	slot=$((n % 30 * 4))
+	echo "waiting for slot $slot"
+	while [ $(($(date +%s) % 120)) -ne "$slot" ]; do
+		sleep 0.2
+	done
+	;;
+esac
 
 cd /opt/svrp
 setsid ./start_svrp.sh router1 </dev/null >/var/log/svrp_start.log 2>&1 &
