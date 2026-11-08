@@ -14,13 +14,22 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 RC_LOCAL="$SCRIPT_DIR/rc.local"
 
+# The svrp driver is a 32-bit program linked against libpcap 0.9.3, which
+# does not restore the 802.1Q tags the kernel strips from received frames,
+# so VLAN tagged traffic never reaches VRP. It is replaced with libpcap from
+# Debian 8, the release the image is based on.
+LIBPCAP_DEB=libpcap0.8_1.6.2-2_i386.deb
+LIBPCAP_URL=https://archive.debian.org/debian/pool/main/libp/libpcap/$LIBPCAP_DEB
+LIBPCAP_SHA256=ce227489fa4322a275dc189a857e450c75a1debbb39b57c1de7d3823bfffda6c
+LIBPCAP_SO=libpcap.so.1.6.2
+
 die() {
 	echo "ERROR: $*" >&2
 	exit 1
 }
 
 [ $# -ge 1 ] && [ -f "$1" ] || die "usage: $0 <image> [output-dir]"
-for tool in qemu-img debugfs sfdisk jq python3; do
+for tool in qemu-img debugfs sfdisk jq python3 curl ar xz; do
 	command -v "$tool" >/dev/null || die "$tool is required"
 done
 
@@ -29,6 +38,15 @@ out_dir=$(readlink -f "${2:-.}")
 
 work=$(mktemp -d "$out_dir/.ensp-XXXXXX")
 trap 'rm -rf "$work"' EXIT
+
+deb="$out_dir/$LIBPCAP_DEB"
+if [ ! -f "$deb" ]; then
+	echo "Downloading $LIBPCAP_DEB"
+	curl -fsSL -o "$deb.part" "$LIBPCAP_URL" || die "failed to download $LIBPCAP_URL"
+	mv "$deb.part" "$deb"
+fi
+echo "$LIBPCAP_SHA256  $deb" | sha256sum -c --quiet - || die "checksum mismatch: $deb"
+ar p "$deb" data.tar.xz | tar -xJ -C "$work" "./usr/lib/i386-linux-gnu/$LIBPCAP_SO"
 
 disk="$src"
 if [[ "$src" == *.zip ]]; then
@@ -82,6 +100,10 @@ sum=$(md5sum <"$RC_LOCAL" | cut -d' ' -f1)
 sed -i "s|^[0-9a-f]\{32\}  /etc/rc.local$|$sum  /etc/rc.local|" "$work/cfgfile.list"
 
 debugfs -w "$work/root.raw" -f - >/dev/null 2>&1 <<EOF
+write $work/usr/lib/i386-linux-gnu/$LIBPCAP_SO /usr/lib/$LIBPCAP_SO
+sif /usr/lib/$LIBPCAP_SO mode 0100644
+rm /usr/lib/libpcap.so.1
+symlink /usr/lib/libpcap.so.1 $LIBPCAP_SO
 write $work/rc.local.ensp /etc/data/rc.local.ensp
 rm /etc/data/rc.local
 write $RC_LOCAL /etc/data/rc.local
@@ -91,6 +113,8 @@ write $work/cfgfile.list /etc/data/cfgfile.list
 sif /etc/data/cfgfile.list mode 0100644
 EOF
 fs_cat /etc/data/rc.local | cmp -s - "$RC_LOCAL" || die "failed to install rc.local"
+debugfs -R "stat /usr/lib/libpcap.so.1" "$work/root.raw" 2>/dev/null |
+	grep -q "Fast link dest: \"$LIBPCAP_SO\"" || die "failed to install $LIBPCAP_SO"
 
 dd if="$work/root.raw" of="$work/disk.raw" bs=1M status=none conv=notrunc,sparse \
 	oflag=seek_bytes seek=$((start * 512))

@@ -48,7 +48,14 @@ it as done. The script can also be run by hand:
 ```
 
 The disk is modified offline with `debugfs`, root is not required. The
-script needs `qemu-img`, `debugfs` (e2fsprogs), `sfdisk`, `jq` and `python3`.
+script needs `qemu-img`, `debugfs` (e2fsprogs), `sfdisk`, `jq`, `python3`,
+`curl`, `ar` (binutils) and `xz`.
+
+The libpcap shipped in the images is too old to pass 802.1Q tagged frames to
+VRP, so it is replaced with `libpcap0.8_1.6.2-2_i386.deb` from Debian 8
+(the release the images are based on). The package is downloaded from
+archive.debian.org on the first conversion and its checksum is verified. To
+build offline, put the file in this directory beforehand.
 
 Tested images:
 
