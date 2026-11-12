@@ -4,6 +4,7 @@ FROM ghcr.io/srl-labs/vrnetlab-base:0.3.0
 ARG DEBIAN_FRONTEND=noninteractive
 # sshpass is used by backup.sh; the base image doesn't ship it.
 RUN apt-get update -qy \
+   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
    && apt-get install -y --no-install-recommends sshpass \
    && rm -rf /var/lib/apt/lists/*
 

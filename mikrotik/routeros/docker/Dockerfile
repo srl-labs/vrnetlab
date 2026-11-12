@@ -2,6 +2,7 @@ FROM ghcr.io/srl-labs/vrnetlab-base:0.3.0
 LABEL org.opencontainers.image.authors="roman@dodin.dev"
 
 RUN apt-get update -qy \
+   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
    && apt-get install -y --no-install-recommends \
    qemu-system-x86 \
    qemu-efi-aarch64 \
