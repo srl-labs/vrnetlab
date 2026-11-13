@@ -5,7 +5,13 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.23 /uv /uvx /bin/
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# Upgrade the packages that ship in debian:trixie-slim, so each rebuild of
+# the base gets the Debian fixes released since the upstream image was built.
+# --force-confdef/--force-confold keep dpkg from prompting about changed
+# conffiles; docker build has no stdin, so a prompt would fail the build.
 RUN apt-get update -qy \
+   && apt-get upgrade -y --no-install-recommends \
+   -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
    && apt-get install -y --no-install-recommends \
    ca-certificates \
    bridge-utils \
