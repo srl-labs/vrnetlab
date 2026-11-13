@@ -1,0 +1,76 @@
+# Rebuilds the vrnetlab base image every other Sunday so its Debian packages
+# pick up security fixes. Each build is pushed as <version>-<yyyymmdd> and
+# also moves the <version> tag, so platform Dockerfiles that use
+# `FROM ghcr.io/srl-labs/vrnetlab-base:<version>` need no change.
+name: base-image
+on:
+  schedule:
+    # Every Sunday 03:00 UTC; the "biweekly" step below skips every other week.
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      base_version:
+        description: "Base image version line to publish"
+        required: true
+        type: string
+        default: "0.3.1"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: base-image
+  cancel-in-progress: false
+
+env:
+  # Scheduled runs have no workflow inputs, so use the same default.
+  BASE_VERSION: ${{ inputs.base_version || '0.3.1' }}
+  IMAGE: ghcr.io/srl-labs/vrnetlab-base
+
+jobs:
+  build:
+    # Forks have no permission to push to ghcr.io/srl-labs.
+    if: github.repository == 'srl-labs/vrnetlab'
+    runs-on: ubuntu-latest
+    steps:
+      - name: biweekly
+        id: biweekly
+        # Weeks since the Unix epoch alternate between even and odd every
+        # Sunday, unlike ISO week numbers, which repeat parity around week 53.
+        # Manual runs always build.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ $(( $(date -u +%s) / 604800 % 2 )) -ne 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.biweekly.outputs.skip == 'false'
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: steps.biweekly.outputs.skip == 'false'
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        if: steps.biweekly.outputs.skip == 'false'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        if: steps.biweekly.outputs.skip == 'false'
+        with:
+          context: .
+          file: vrnetlab-base.dockerfile
+          platforms: linux/amd64
+          # Always pull the latest debian:trixie-slim and skip the layer cache,
+          # otherwise the apt-get upgrade layer would be reused as-is.
+          pull: true
+          no-cache: true
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.BASE_VERSION }}-${{ steps.biweekly.outputs.date }}
+            ${{ env.IMAGE }}:${{ env.BASE_VERSION }}
