@@ -1,0 +1,17 @@
+#cloud-config
+hostname: vco
+manage_etc_hosts: true
+
+# Host-level config
+password: Velocloud123
+chpasswd: { expire: false }
+ssh_pwauth: true
+
+vco:
+  system_properties:
+     list: |
+        network.public.address:100.64.64.2
+        gateway.activation.validate.source:false
+
+runcmd:
+  - chage -M -1 vcadmin
