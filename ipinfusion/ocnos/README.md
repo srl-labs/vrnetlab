@@ -4,11 +4,14 @@ This is the vrnetlab docker image for IPInfusion OcNOS.
 
 ## Building the docker image
 
-Download the OcNOS-VM image from https://www.ipinfusion.com/products/ocnos-vm/
-Copy the qcow2 image into this folder, then run `make docker-image`.
+Download the OcNOS VM image for KVM from IP Infusion (free, registration required):
+https://www.ipinfusion.com/free-software-demos/?vm=KVM
+
+Decompress it (`xz -d`), copy the qcow2 image into this folder, then run `make docker-image`.
 
 Tested booting and responding to Telnet:
 
+- OcNOS-SP-PLUS-x86-7.0.0-262-GA.qcow2 MD5:8c6f3a35c431924149fb43143ae35a62
 - OcNOS-SP-PLUS-x86-6.5.2-101-GA.qcow2 MD5:796c121be77d43ffffbf6214a44f54eb
 
 Tested booting and responding to SSH:  
