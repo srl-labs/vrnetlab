@@ -8,6 +8,12 @@ on:
     # Every Sunday 03:00 UTC; the "biweekly" step below skips every other week.
     - cron: "0 3 * * 0"
   workflow_dispatch:
+    inputs:
+      base_version:
+        description: "Base image version line to publish"
+        required: true
+        type: string
+        default: "0.3.1"
 
 permissions:
   contents: read
@@ -18,8 +24,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Bump when the base changes in a way that needs a new version line.
-  BASE_VERSION: 0.3.0
+  # Scheduled runs have no workflow inputs, so use the same default.
+  BASE_VERSION: ${{ inputs.base_version || '0.3.1' }}
   IMAGE: ghcr.io/srl-labs/vrnetlab-base
 
 jobs:
