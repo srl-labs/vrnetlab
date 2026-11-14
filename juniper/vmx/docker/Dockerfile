@@ -1,4 +1,4 @@
-FROM ghcr.io/srl-labs/vrnetlab-base:0.3.0
+FROM ghcr.io/srl-labs/vrnetlab-base:0.3.1
 LABEL org.opencontainers.image.authors="roman@dodin.dev"
 
 RUN apt-get update -qy \
