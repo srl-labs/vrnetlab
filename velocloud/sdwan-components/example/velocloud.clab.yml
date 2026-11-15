@@ -1,0 +1,50 @@
+# VCO + VCC + VCE behind a simple Linux router.
+# The router reaches the Internet through the host bridge pnet0 (EVE-NG's
+# uplink): it takes a DHCP address there and NATs the lab subnets out of it.
+# Each node bind-mounts its own cloud-init directory (user-data, meta-data,
+# optional network-config) to /config/cloud-init. See ../README.md.
+name: velocloud
+
+topology:
+  nodes:
+    vco:
+      kind: generic_vm
+      image: vrnetlab/velocloud_vco:6.4.2.13
+      binds:
+        - ./cloud-init/vco:/config/cloud-init:ro   # eth0 DHCP 10.0.0.15 (mgmt only), eth1 100.64.64.2/24
+
+    vcg1:
+      kind: generic_vm
+      image: vrnetlab/velocloud_vcc:6.4.4.0
+      binds:
+        - ./cloud-init/vcg1:/config/cloud-init:ro  # eth0 DHCP 10.0.0.15 (mgmt only), eth1 100.64.65.2/24, WAN moved to eth1
+
+    vce1:
+      kind: generic_vm
+      image: vrnetlab/velocloud_vce:6.4.4.0
+      binds:
+        - ./cloud-init/vce1:/config/cloud-init:ro  # GE3 172.25.0.2/24, GE4 100.64.66.2/24
+
+    pnet0:                  # existing host bridge with Internet access
+      kind: bridge
+
+    router:
+      kind: linux
+      image: alpine:latest
+      exec:
+        - sysctl -w net.ipv4.ip_forward=1
+        - ip addr add 100.64.64.1/24 dev eth1
+        - ip addr add 100.64.65.1/24 dev eth2
+        - ip addr add 100.64.66.1/24 dev eth3
+        - ip addr add 172.25.0.1/24 dev eth4
+        - apk add --no-cache iptables                       # still via the clab mgmt network
+        - ip route del default                              # drop the mgmt default route...
+        - udhcpc -i eth5 -q -n -t 10                        # ...and take one from DHCP on pnet0
+        - iptables -t nat -A POSTROUTING -o eth5 -j MASQUERADE
+
+  links:
+    - endpoints: ["vco:eth1", "router:eth1"]
+    - endpoints: ["vcg1:eth1", "router:eth2"]
+    - endpoints: ["vce1:eth3", "router:eth3"]   # GE4
+    - endpoints: ["vce1:eth2", "router:eth4"]   # GE3
+    - endpoints: ["router:eth5", "pnet0:velo-rtr-eth5"]   # uplink to the Internet

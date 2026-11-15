@@ -158,6 +158,7 @@ routing products:
 * Juniper vJunos-router
 * Juniper vJunosEvolved
 * Nokia SR OS
+* VeloCloud SD-WAN (Edge, Gateway, Orchestrator)
 * OpenBSD
 * FreeBSD
 * Ubuntu
