@@ -4,7 +4,7 @@ DEFAULT_USER="admin"
 DEFAULT_PASSWORD="admin"
 REMOTE_FILE="/etc/sonic/config_db.json"
 TMP_FILE="/tmp/${REMOTE_FILE##*/}"
-BACKUP_FILE="/config/${REMOTE_FILE##*/}"
+BACKUP_FILE="${BACKUP_FILE:-/config/${REMOTE_FILE##*/}}"
 
 handle_args() {
     # Parse options
@@ -98,6 +98,7 @@ restore() {
             $SCP_CMD $BACKUP_FILE $HOST:$TMP_FILE && $SSH_CMD $HOST "sudo config load -y $TMP_FILE && sudo config save -y"
         else
             echo "Failed to establish SSH connection. Config copy operation aborted."
+            return 1
         fi
     else
         echo "$BACKUP_FILE not found. Nothing to push to the VM."
