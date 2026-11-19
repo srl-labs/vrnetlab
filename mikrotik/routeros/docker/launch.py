@@ -38,6 +38,9 @@ ROS_MGMT_ADDR = "172.31.255.30"
 PREFIX_LENGTH = "30"
 CONFIG_FILE = "/ftpboot/config.auto.rsc"
 
+# Get FTP client connect timeout from ENV if provided
+FTP_TIMEOUT = vrnetlab.getenv_uint("FTP_TIMEOUT", 30)
+
 
 def trace(self, message, *args, **kws):
     # Yes, logger takes its '*args' as 'args'.
@@ -223,7 +226,7 @@ class ROS_vm(vrnetlab.VM):
         max_attempts = 5
         for i in range(1, max_attempts + 1):
             try:
-                with ftplib.FTP(ROS_MGMT_ADDR, self.username, self.password) as session:
+                with ftplib.FTP(ROS_MGMT_ADDR, self.username, self.password, '', FTP_TIMEOUT) as session:
                     with open(CONFIG_FILE, "rb") as file:  # file to send
                         session.storbinary(
                             "STOR config.auto.rsc", file
@@ -236,7 +239,7 @@ class ROS_vm(vrnetlab.VM):
                 if i != max_attempts:
                     self.logger.info("Trying again")
                 else:
-                    self.logger.info(f"Giving up after {max_attempts}")
+                    self.logger.info(f"Giving up after {max_attempts} attempts")
 
         self.logger.info("config pushed via FTP")
 
