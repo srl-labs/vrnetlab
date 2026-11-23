@@ -65,6 +65,9 @@ class EXOS_vm(vrnetlab.VM):
         commands are rejected. This wrapper retries the command until success.
         """
         for attempt in range(retries):
+            # drop any stale output (e.g. leftover prompts) so that read_until
+            # below matches the prompt following *this* command
+            self.tn.read_very_eager()
             self.tn.write(f"{cmd}\r".encode())
             try:
                 res = self.tn.read_until(wait.encode(), timeout=30)
@@ -146,13 +149,15 @@ class EXOS_vm(vrnetlab.VM):
         self.wait_write_config(cmd=f"configure vlan Mgmt ipaddress {self.mgmt_address_ipv4}")
         self.wait_write_config(cmd=f"configure iproute add default {self.mgmt_gw_ipv4} vr VR-Mgmt")
         if self.username == "admin":
-            self.wait_write(cmd="configure account admin password", wait="#")
-            self.wait_write(cmd="", wait="Current user's password:")
-            self.wait_write(cmd=self.password, wait="New password:")
-            self.wait_write(cmd=self.password, wait="Reenter password:")
+            self.wait_write_config(
+                cmd="configure account admin password", wait="Current user's password:"
+            )
+            self.wait_write_config(cmd="", wait="New password:")
+            self.wait_write_config(cmd=self.password, wait="Reenter password:")
+            self.wait_write_config(cmd=self.password)
         else:
-            self.wait_write(
-                cmd=f"create account admin {self.username} {self.password}", wait="#"
+            self.wait_write_config(
+                cmd=f"create account admin {self.username} {self.password}"
             )
         self.wait_write_config(cmd="disable cli prompting")
         self.wait_write_config(cmd="configure ssh2 key")
