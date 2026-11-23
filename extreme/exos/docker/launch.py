@@ -161,6 +161,9 @@ class EXOS_vm(vrnetlab.VM):
             )
         self.wait_write_config(cmd="disable cli prompting")
         self.wait_write_config(cmd="configure ssh2 key")
+        # sign with SHA-2 instead of SHA-1 (ssh-rsa is rejected by recent clients,
+        # e.g. paramiko 5); must be set before ssh2 is enabled to avoid a restart
+        self.wait_write_config(cmd="configure ssh2 key algorithm rsa-sha2-512")
         self.wait_write_config(cmd="enable ssh2")
         self.wait_write_config(cmd="save")
 
