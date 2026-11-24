@@ -8,7 +8,7 @@ Put the .qcow2 file in this directory and run `make` or `make docker-image` and
 you should be good to go. The resulting image is called `vrnetlab/cisco_asav:9-24-1`.
 You can tag it with something else if you want, like `my-repo.example.com/vr-asav` and
 then push it to your repo. The tag is the same as the version of the ASAv image, so
-if you have asav9-23-1.qcow2 your final docker image will be called
+if you have asav9-24-1.qcow2 your final docker image will be called
 vrnetlab/cisco_asav:9-24-1.
 
 Please note that you will always need to specify version when starting your
@@ -18,12 +18,14 @@ in this context.
 It's been tested to boot and respond to SSH/telnet with:
 
 - 9.24.1 (asav9-24-1.qcow2) — the ASAv in the CML refplat 2.10
-- 9.23.1 (asav9-23-1.qcow2) - not tested in the last PR (2026-09)
+- 9.23.1 (asav9-23-1.qcow2) — tested before 2026-09, not re-tested since
 - 9.18.1 (asav9-18-1.qcow2)
 - 9.9.2 (asav9-9-2.qcow2)
 
 Bootstrap prompts vary between releases, so the launcher answers the ones it is
-given rather than a fixed sequence.
+given rather than a fixed sequence. Each console dialog waits at most
+`CONSOLE_DIALOG_TIMEOUT` seconds (default 60) for its prompt; raise it through
+the container environment on a slow or heavily loaded host.
 
 ## Usage
 
@@ -88,5 +90,5 @@ Disk: <500MB
 
 ### Q: Has this been extensively tested?
 
-A: Nope. Not really, in September 2026, the version available in CML: 9.24.1 was tested successfully. Same for 9.18.1.
-9.9.2 was briefly tested, i.e. the container is healthy, but no further tests were performed.
+A: Not extensively. 9.24.1 (the version in CML) and 9.18.1 were tested successfully in
+September 2026. 9.9.2 was only checked to come up healthy.

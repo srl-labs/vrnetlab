@@ -240,6 +240,11 @@ ssh timeout 60"""
 
         A failure here only leaves the dialog to whoever logs in first, so it is
         logged and the bootstrap carries on.
+
+        The prompts waited for are built from the container hostname: a startup
+        configuration that renames the device makes each dialog run into its
+        timeout before the failure path above. Console authentication is assumed
+        to be unset beforehand; it is removed again, not restored.
         """
         exec_prompt = re.compile(rf"{re.escape(self.hostname)}>")
         priv_prompt = re.compile(rf"{re.escape(self.hostname)}#")
@@ -299,7 +304,11 @@ ssh timeout 60"""
         deadline = time.time() + timeout
         try:
             while time.time() < deadline:
-                buf += con.channel.read().decode(errors="replace")
+                chunk = con.channel.read().decode(errors="replace")
+                if not chunk:
+                    time.sleep(0.1)
+                    continue
+                buf += chunk
                 if prompt.search(buf):
                     return
                 # the earliest match wins: 'Enter Password:' ends in 'Password:'
@@ -317,7 +326,10 @@ ssh timeout 60"""
                 con.channel.write(reply, redacted=True)
                 con.channel.send_return()
 
-            raise ScrapliTimeout(f"no '{prompt.pattern}' prompt after '{command}'")
+            raise ScrapliTimeout(
+                f"no '{prompt.pattern}' prompt after '{command}', "
+                f"console ended with: {buf[-200:]!r}"
+            )
         finally:
             transport_args.timeout_transport = original_timeout
 
