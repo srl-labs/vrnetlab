@@ -121,8 +121,17 @@ class VJUNOSROUTER_vm(vrnetlab.VM):
             self.logger.trace(
                 f"Startup config file {STARTUP_CONFIG_FILE} found, appending to initial configuration"
             )
+            # Strip any address the startup config sets on the mgmt interface so
+            # fxp0 carries only the launcher's own address (rendered into
+            # juniper.conf above). Junos keeps multiple addresses per interface,
+            # so an appended one is added alongside the launcher's rather than
+            # replacing it, leaving a stale/foreign address on the management
+            # interface. Keyed on the interface name, not the address value (the
+            # stale value differs from the current one).
             with open(STARTUP_CONFIG_FILE, "r") as file:
-                startup_cfg = file.read()
+                startup_cfg = vrnetlab.strip_mgmt_interface_config(
+                    file.read(), "fxp0", "junos"
+                )
             with open(JUNIPER_CONFIG_FILE, "a") as file:
                 file.write(startup_cfg)
 
