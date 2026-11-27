@@ -2,7 +2,7 @@ IMG_NAME=$(shell echo $(NAME) | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
 IMG_VENDOR=$(shell echo $(VENDOR) | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
 IMG_REPOSITORY=$(REGISTRY)$(IMG_VENDOR)_$(IMG_NAME)
 IMAGES=$(shell ls $(IMAGE_GLOB) 2>/dev/null)
-NUM_IMAGES=$(shell ls $(IMAGES) | wc -l)
+NUM_IMAGES=$(words $(IMAGES))
 VRNETLAB_VERION=$$(git log -1 --format=format:"Commit: %H from %aD")
 
 # If DOCKER_PLATFORM is set, add --platform flag to docker build

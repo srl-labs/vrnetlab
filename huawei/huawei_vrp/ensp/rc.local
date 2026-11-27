@@ -1,0 +1,140 @@
+#!/bin/sh
+#
+# Boot-time startup of VRP for eNSP-derived images.
+#
+# In eNSP the VRP instance is created and started by a control service
+# (svrp_agent.sh) on request from the eNSP GUI. This script does the same on
+# its own, so the VM comes up as a standalone router:
+#
+#   eth0                 -> GigabitEthernet0/0/0 (management, MPU board)
+#   other NICs           -> ports of the first LPU card, in PCI order,
+#                           ports without a NIC stay down
+#   /dev/ttyS0           <-> VRP console (tcp/20000)
+#
+# NICs with a 0c:00:* MAC address are vrnetlab's own (management and the
+# vrp-dummy interface) and are not mapped to LPU ports.
+
+LOG=/var/log/vrnetlab.log
+CONSOLE_PORT=20000
+
+exec >>"$LOG" 2>&1
+echo "--- boot $(date)"
+
+# Keep the host OS silent on the data plane links.
+sysctl -q -w net.ipv6.conf.all.disable_ipv6=1
+sysctl -q -w net.ipv6.conf.default.disable_ipv6=1
+
+insmod /lib/modules/$(uname -r)/kernel/drivers/block/loop.ko max_loop=64
+ifconfig lo 127.0.0.1 up
+
+for rpg in $(find /opt/v8pkgpool -name '*.rpg'); do
+	dir=$(dirname "$rpg")
+	mountpoint -q "$dir/rpg" || mount -o loop "$rpg" "$dir/rpg"
+	# forwarding engine patched by convert.sh (patch_sfe.py)
+	sfe=$dir/rpg/module/libsfe.so
+	if [ -f /etc/data/libsfe.so ] && [ -f "$sfe" ] && ! mountpoint -q "$sfe"; then
+		mount --bind /etc/data/libsfe.so "$sfe"
+	fi
+done
+
+# Product type (ne40e, ne5ke, ...) and its package pool.
+pkg=$(ls /opt/v8pkgpool/v8_current_pkg.* | head -1)
+product=${pkg##*.}
+pool=$(ls -d /opt/v8pkgpool/*/"$product" | head -1)
+
+mpu=$(awk '$1 == "mmb" || $1 == "mb" { print $2; exit }' "$pool/router/router.cfg")
+lpu=$(awk '$1 == "lc" { print $2; exit }' "$pool/router/router.cfg")
+echo "product=$product mpu=$mpu lpu=$lpu"
+
+if [ ! -d /opt/svrp/router1 ]; then
+	cd /opt
+	./svrp_agent.sh add "router1/$mpu" "$product"
+	[ -n "$lpu" ] && ./svrp_agent.sh add "router1/$lpu" "$product"
+fi
+
+data_nics=""
+for nic in $(for n in /sys/class/net/eth*; do
+		echo "$(readlink -f "$n/device") ${n##*/}"
+	done | sort | awk '{ print $2 }'); do
+	[ "$nic" = eth0 ] && continue
+	case $(cat "/sys/class/net/$nic/address") in
+		0c:00:*) continue ;;
+	esac
+	data_nics="$data_nics $nic"
+done
+echo "data nics:$data_nics"
+
+for nic in $(ls /sys/class/net | grep '^eth'); do
+	ip link set "$nic" promisc on up
+done
+
+# Regenerate the LPU port map on every boot, NIC names may change.
+#
+# Without a filter attribute svrp_drv only passes frames sent to the port MAC
+# (pcap filter "ether dst <mac> || ..."), which breaks VLANIF interfaces and
+# any switching through the node. Pass everything received instead.
+if [ -n "$lpu" ]; then
+	awk -v nics="$data_nics" '
+		BEGIN { n = split(nics, nic, " "); port = 1; card = -1 }
+		/<Card / { card++ }
+		card == 0 && /iface="[^"]*"/ {
+			if (port <= n)
+				attr = "iface=\"" nic[port] "\" filter=\"inbound\""
+			else
+				attr = "iface=\"none\""
+			sub(/iface="[^"]*"/, attr)
+			port++
+		}
+		{ print }
+	' "$pool/io/board_cfg.xml" > "/opt/svrp/router1/$lpu/board_cfg.xml"
+fi
+
+# Interface MAC addresses are derived from MAC_OFFSET ("high.low"), which
+# start_svrp.sh takes from a number kept in mac.stash and initialised from
+# $RANDOM. Identical VMs boot identically and would all get the same addresses,
+# so seed it from the management MAC instead.
+if [ ! -f /opt/svrp/mac.stash ]; then
+	seed=$(md5sum </sys/class/net/eth0/address | cut -c1-4)
+	echo $((0x$seed & 32767)) >/opt/svrp/mac.stash
+fi
+seed=$(cat /opt/svrp/mac.stash)
+export MAC_OFFSET=$((seed >> 8)).$((seed & 255))
+
+# NE images generate the system MAC (LLDP chassis ID) from the time VRP
+# starts, nodes started within the same second get the same one. Start each
+# node in its own 4 second slot of a 2 minute cycle, picked from the serial
+# number (launch.py sets it to the container address) or from the management
+# MAC. The slots are wide because VRP reads the time a few seconds after
+# start_svrp.sh, depending on the platform and load. CE images use a fixed
+# system MAC, waiting does not help there.
+case $product in
+s6800|s12800)
+	;;
+*)
+	serial=$(cat /sys/class/dmi/id/product_serial 2>/dev/null)
+	case $serial in
+	*.*.*.*) n=$(echo "$serial" | awk -F. '{ print $3 * 256 + $4 }') ;;
+	*) n=$((0x$(md5sum </sys/class/net/eth0/address | cut -c5-8))) ;;
+	esac
+	slot=$((n % 30 * 4))
+	echo "waiting for slot $slot"
+	while [ $(($(date +%s) % 120)) -ne "$slot" ]; do
+		sleep 0.2
+	done
+	;;
+esac
+
+cd /opt/svrp
+setsid ./start_svrp.sh router1 </dev/null >/var/log/svrp_start.log 2>&1 &
+
+stty -F /dev/ttyS0 115200 raw -echo
+(
+	while true; do
+		if netstat -lnt | grep -q ":$CONSOLE_PORT "; then
+			nc6 -4 127.0.0.1 "$CONSOLE_PORT" </dev/ttyS0 >/dev/ttyS0 2>/dev/null
+		fi
+		sleep 2
+	done
+) &
+
+exit 0
