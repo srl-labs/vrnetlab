@@ -11,6 +11,7 @@ cisco*.bin
 *.vdi
 *.iso
 *cidfile
+built-image-sha*
 
 .DS_Store
 */.DS_Store
