@@ -70,9 +70,10 @@ class EXOS_vm(vrnetlab.VM):
             self.tn.read_very_eager()
             self.tn.write(f"{cmd}\r".encode())
             try:
+                # read_until() does not raise on timeout, it returns the partial buffer
                 res = self.tn.read_until(wait.encode(), timeout=30)
                 response_str = res.decode(errors="ignore")
-                
+
                 # Check if we got the config load error
                 if "configuration load" in response_str.lower():
                     if attempt < retries - 1:  # Don't log on last attempt
@@ -81,15 +82,21 @@ class EXOS_vm(vrnetlab.VM):
                         )
                     time.sleep(delay)
                     continue
-                    
-                # Success - command completed
+
+                # Not retried: resending at an unexpected (e.g. password) prompt
+                # would desync the console further
+                if wait.encode() not in res:
+                    self.logger.warning(
+                        f"Prompt '{wait}' not seen within 30s after '{cmd}', continuing"
+                    )
                 return
             except Exception as e:
-                self.logger.warning(f"Timeout waiting for prompt after '{cmd}': {e}")
+                # only console I/O errors end up here (read_until does not raise on timeout)
+                self.logger.warning(f"Console error after '{cmd}': {e!r}")
                 if attempt < retries - 1:
                     time.sleep(delay)
                 continue
-                
+
         self.logger.error(f"Command '{cmd}' failed after {retries} retries")
 
     def bootstrap_spin(self):
