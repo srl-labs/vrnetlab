@@ -29,6 +29,10 @@ Workaround: set the `QEMU_CPU` environment variable to `core2duo`, e.g. in a con
       QEMU_CPU: core2duo
 ```
 
+## SSH host key algorithm
+
+The bootstrap sets `configure ssh2 key algorithm rsa-sha2-512` before enabling SSH, so the host key is signed with SHA-2 instead of `ssh-rsa` (SHA-1), which recent SSH clients reject. This command was added in EXOS 32.5; all images on the Extreme Networks github page are 32.6 or later.
+
 ## Tested versions
 
 On an AMD EPYC host, 32.6.3.126, 32.7.2.19 and 33.6.1.14 boot with `QEMU_CPU=core2duo`, and both management passthrough and the startup-config bind work.
