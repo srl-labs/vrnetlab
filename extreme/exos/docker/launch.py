@@ -65,11 +65,15 @@ class EXOS_vm(vrnetlab.VM):
         commands are rejected. This wrapper retries the command until success.
         """
         for attempt in range(retries):
+            # drop any stale output (e.g. leftover prompts) so that read_until
+            # below matches the prompt following *this* command
+            self.tn.read_very_eager()
             self.tn.write(f"{cmd}\r".encode())
             try:
+                # read_until() does not raise on timeout, it returns the partial buffer
                 res = self.tn.read_until(wait.encode(), timeout=30)
                 response_str = res.decode(errors="ignore")
-                
+
                 # Check if we got the config load error
                 if "configuration load" in response_str.lower():
                     if attempt < retries - 1:  # Don't log on last attempt
@@ -78,15 +82,21 @@ class EXOS_vm(vrnetlab.VM):
                         )
                     time.sleep(delay)
                     continue
-                    
-                # Success - command completed
+
+                # Not retried: resending at an unexpected (e.g. password) prompt
+                # would desync the console further
+                if wait.encode() not in res:
+                    self.logger.warning(
+                        f"Prompt '{wait}' not seen within 30s after '{cmd}', continuing"
+                    )
                 return
             except Exception as e:
-                self.logger.warning(f"Timeout waiting for prompt after '{cmd}': {e}")
+                # only console I/O errors end up here (read_until does not raise on timeout)
+                self.logger.warning(f"Console error after '{cmd}': {e!r}")
                 if attempt < retries - 1:
                     time.sleep(delay)
                 continue
-                
+
         self.logger.error(f"Command '{cmd}' failed after {retries} retries")
 
     def bootstrap_spin(self):
@@ -146,16 +156,21 @@ class EXOS_vm(vrnetlab.VM):
         self.wait_write_config(cmd=f"configure vlan Mgmt ipaddress {self.mgmt_address_ipv4}")
         self.wait_write_config(cmd=f"configure iproute add default {self.mgmt_gw_ipv4} vr VR-Mgmt")
         if self.username == "admin":
-            self.wait_write(cmd="configure account admin password", wait="#")
-            self.wait_write(cmd="", wait="Current user's password:")
-            self.wait_write(cmd=self.password, wait="New password:")
-            self.wait_write(cmd=self.password, wait="Reenter password:")
+            self.wait_write_config(
+                cmd="configure account admin password", wait="Current user's password:"
+            )
+            self.wait_write_config(cmd="", wait="New password:")
+            self.wait_write_config(cmd=self.password, wait="Reenter password:")
+            self.wait_write_config(cmd=self.password)
         else:
-            self.wait_write(
-                cmd=f"create account admin {self.username} {self.password}", wait="#"
+            self.wait_write_config(
+                cmd=f"create account admin {self.username} {self.password}"
             )
         self.wait_write_config(cmd="disable cli prompting")
         self.wait_write_config(cmd="configure ssh2 key")
+        # sign with SHA-2 instead of SHA-1 (ssh-rsa is rejected by recent clients,
+        # e.g. paramiko 5); must be set before ssh2 is enabled to avoid a restart
+        self.wait_write_config(cmd="configure ssh2 key algorithm rsa-sha2-512")
         self.wait_write_config(cmd="enable ssh2")
         self.wait_write_config(cmd="save")
 
